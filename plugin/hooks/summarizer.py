@@ -23,7 +23,9 @@ CONFIG_DIR = os.path.expanduser("~/.code-earn")
 CACHE_FILE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 LOCK_FILE = os.path.join(CONFIG_DIR, ".summarizer.lock")
+STATUS_FILE = os.path.join(CONFIG_DIR, ".summary-status.json")
 MAX_CACHE = 500
+STATUS_MAX_AGE_SEC = 120
 
 # Meta tags we'll look for, in priority order
 META_PATTERNS = [
@@ -174,6 +176,37 @@ def release_lock_for(key):
         pass
 
 
+def write_status(url, stage):
+    """Publish a per-URL progress stage so the viewer can render it.
+
+    stage ∈ {fetching, translating, error, done}. 'done' clears the entry.
+    """
+    if not url:
+        return
+    try:
+        statuses = {}
+        if os.path.exists(STATUS_FILE):
+            try:
+                with open(STATUS_FILE) as f:
+                    statuses = json.load(f)
+            except Exception:
+                statuses = {}
+        now = time.time()
+        # Drop stale entries so the file doesn't grow forever
+        statuses = {
+            k: v for k, v in statuses.items()
+            if isinstance(v, dict) and now - v.get("ts", 0) < STATUS_MAX_AGE_SEC
+        }
+        if stage == "done":
+            statuses.pop(url, None)
+        else:
+            statuses[url] = {"stage": stage, "ts": now}
+        with open(STATUS_FILE, "w") as f:
+            json.dump(statuses, f)
+    except Exception:
+        pass
+
+
 def main():
     if len(sys.argv) < 4:
         sys.exit(0)
@@ -198,13 +231,16 @@ def main():
         sys.exit(0)
 
     try:
+        write_status(url, "fetching")
         raw_desc = fetch_meta_description(url)
         if not raw_desc:
+            write_status(url, "error")
             return
 
         if target_lang == "en":
             summary = raw_desc
         else:
+            write_status(url, "translating")
             summary = translate_summary(raw_desc, target_lang) or raw_desc
 
         # Trim summary to something reasonable
@@ -215,6 +251,7 @@ def main():
         cache[key] = {"summary": summary, "ts": int(time.time())}
         save_cache(cache)
         update_current_news(original_title, summary)
+        write_status(url, "done")
     finally:
         release_lock_for(key)
 

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Live-updating news viewer. Runs in a separate tmux pane or terminal window.
 
-Controls:
+Controls (news mode):
   ↑/k     move selection up
   ↓/j     move selection down
   Enter/o open selected item in browser
+  space   toggle summary for selected item
   r       refresh now
+  g       switch to game mode
   q       quit
-  Ctrl+C  quit
+
+Controls (game mode):
+  ↑↓/jk   move selection
+  Enter   launch selected game
+  g/ESC   back to news
+  q       quit
 """
 
 import json
@@ -28,8 +35,17 @@ CONFIG_DIR = os.path.expanduser("~/.code-earn")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CURRENT_NEWS = os.path.join(CONFIG_DIR, ".current-news")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
+SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
+SUMMARY_STATUS = os.path.join(CONFIG_DIR, ".summary-status.json")
 TRANSLATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks", "translator.py")
+SUMMARIZER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks", "summarizer.py")
+GAMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games")
 REFRESH_SEC = 30
+
+GAMES = [
+    {"name": "2048", "desc": "merge tiles to 2048", "script": "game_2048.py"},
+    {"name": "Snake", "desc": "classic snake game", "script": "snake.py"},
+]
 
 CSI = "\x1b["
 RESET = CSI + "0m"
@@ -80,6 +96,58 @@ def load_translation_cache():
             return json.load(f)
     except Exception:
         return {}
+
+
+def load_summary_cache():
+    if not os.path.exists(SUMMARY_CACHE):
+        return {}
+    try:
+        with open(SUMMARY_CACHE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def lookup_summary(cache, target_lang, url):
+    if not url:
+        return None
+    entry = cache.get(f"{target_lang}::{url}")
+    if entry and entry.get("summary"):
+        return entry["summary"]
+    return None
+
+
+def lookup_summary_stage(url):
+    """Return current background stage for url ('fetching'|'translating'|'error') or None."""
+    if not url or not os.path.exists(SUMMARY_STATUS):
+        return None
+    try:
+        with open(SUMMARY_STATUS) as f:
+            statuses = json.load(f)
+        entry = statuses.get(url)
+        if isinstance(entry, dict):
+            return entry.get("stage")
+    except Exception:
+        pass
+    return None
+
+
+def spawn_summarizer(target_lang, url, original_title):
+    if not (url and original_title and os.path.exists(SUMMARIZER)):
+        return
+    env = os.environ.copy()
+    env["CODE_EARN_BACKGROUND_CHILD"] = "1"
+    try:
+        subprocess.Popen(
+            ["python3", SUMMARIZER, target_lang, url, original_title],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=env,
+        )
+    except Exception:
+        pass
 
 
 def detect_lang():
@@ -134,6 +202,26 @@ def truncate(s, n):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def wrap_text(s, width):
+    """Naive word-wrap. Splits on spaces; preserves long tokens."""
+    if not s:
+        return [""]
+    words = s.split()
+    lines = []
+    cur = ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= width:
+            cur += " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
 def supports_osc8():
     """Heuristic check for terminals known to render OSC 8 hyperlinks."""
     tp = os.environ.get("TERM_PROGRAM", "")
@@ -169,11 +257,11 @@ def short_url(url):
         return url[:40]
 
 
-def render(data, current, cols, selected_idx=0):
+def render(data, current, cols, selected_idx=0, summary_state=None):
     clear()
     header = (
         f"{BOLD}{CYAN}  code-earn feed{RESET}  "
-        f"{DIM}↑↓/jk select · enter/o open · r refresh · q quit{RESET}"
+        f"{DIM}↑↓/jk select · enter/o open · space summary · r refresh · q quit{RESET}"
     )
     print(header)
     print()
@@ -230,6 +318,27 @@ def render(data, current, cols, selected_idx=0):
             url_tail = f"  {GREY}{short_url(url)}{RESET}"
 
         print(f"  {cursor} {CYAN}{source:<15}{RESET} {linked_title}{score_str}{comments_str}{url_tail}")
+
+    if summary_state and 0 <= selected_idx < len(items):
+        sel_url = items[selected_idx].get("url", "")
+        if sel_url and summary_state.get("url") == sel_url:
+            print()
+            status = summary_state.get("status")
+            text = summary_state.get("text") or ""
+            label = f"{CYAN}↳ summary{RESET}"
+            if status == "loading":
+                stage = summary_state.get("stage")
+                stage_msg = {
+                    "fetching": "fetching page…",
+                    "translating": "translating…",
+                }.get(stage, "starting…")
+                print(f"  {label} {DIM}{stage_msg}{RESET}")
+            elif status == "error":
+                print(f"  {label} {YELLOW}(no description available){RESET}")
+            elif text:
+                wrap_w = max(40, cols - 6)
+                for line in wrap_text(text, wrap_w):
+                    print(f"  {DIM}{line}{RESET}")
 
     print()
     footer = (
@@ -302,6 +411,131 @@ def open_selected(data, idx):
                 pass
 
 
+SUMMARY_TIMEOUT_SEC = 35
+
+
+def render_games(selected_idx, cols, msg=""):
+    clear()
+    header = (
+        f"{BOLD}{CYAN}  code-earn games{RESET}  "
+        f"{DIM}↑↓/jk select · enter launch · g/esc back · q quit{RESET}"
+    )
+    print(header)
+    print()
+    for idx, game in enumerate(GAMES):
+        cursor = f"{YELLOW}▶{RESET}" if idx == selected_idx else " "
+        name = game.get("name", "")
+        desc = game.get("desc", "")
+        title_color = BOLD + WHITE if idx == selected_idx else WHITE
+        print(f"  {cursor} {title_color}{name:<10}{RESET} {DIM}{desc}{RESET}")
+    print()
+    if msg:
+        print(f"  {DIM}{msg}{RESET}")
+
+
+def launch_game(idx, fd, old_termios):
+    """Restore terminal mode, run the game as a subprocess, then re-enter raw mode."""
+    if not (0 <= idx < len(GAMES)):
+        return
+    script = os.path.join(GAMES_DIR, GAMES[idx]["script"])
+    if not os.path.exists(script):
+        return
+    # Hand the terminal back to the child
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_termios)
+    except Exception:
+        pass
+    sys.stdout.write(CSI + "2J" + CSI + "H")
+    sys.stdout.flush()
+    try:
+        subprocess.call(["python3", script])
+    except Exception as exc:
+        sys.stdout.write(f"\n  game error: {exc}\n")
+    finally:
+        try:
+            tty.setcbreak(fd)
+        except Exception:
+            pass
+
+
+def selected_item(data, idx):
+    items = list((data or {}).get("items", []) or [])
+    if 0 <= idx < len(items):
+        return items[idx]
+    return None
+
+
+def _build_summary_state(item, target_lang, spawn_if_missing):
+    url = item.get("url") or ""
+    if not url:
+        return None
+    cache = load_summary_cache()
+    cached = lookup_summary(cache, target_lang, url)
+    if cached:
+        return {"url": url, "status": "ready", "text": cached, "lang": target_lang}
+    if spawn_if_missing:
+        original = item.get("_original_title") or item.get("title") or ""
+        spawn_summarizer(target_lang, url, original)
+    return {
+        "url": url,
+        "status": "loading",
+        "text": "",
+        "lang": target_lang,
+        "started": time.time(),
+    }
+
+
+def toggle_summary(data, idx, summary_state):
+    """Space key: toggle summary for the selected item."""
+    item = selected_item(data, idx)
+    if not item:
+        return summary_state
+    url = item.get("url") or ""
+    if not url:
+        return summary_state
+    # Toggle off if same URL is already shown
+    if summary_state and summary_state.get("url") == url:
+        return None
+    _, target_lang = translation_settings()
+    return _build_summary_state(item, target_lang, spawn_if_missing=True)
+
+
+def autoload_summary(data, idx, summary_state):
+    """Arrow-key navigation: auto-load summary for the new selection."""
+    item = selected_item(data, idx)
+    if not item:
+        return summary_state
+    url = item.get("url") or ""
+    if not url:
+        return summary_state
+    # Skip rebuild if we're already on this URL and have content / loading
+    if summary_state and summary_state.get("url") == url:
+        return summary_state
+    _, target_lang = translation_settings()
+    return _build_summary_state(item, target_lang, spawn_if_missing=True)
+
+
+def refresh_summary_state(state):
+    if not state or state.get("status") != "loading":
+        return state
+    cache = load_summary_cache()
+    cached = lookup_summary(cache, state.get("lang", "en"), state.get("url", ""))
+    if cached:
+        state["status"] = "ready"
+        state["text"] = cached
+        state["stage"] = None
+        return state
+    stage = lookup_summary_stage(state.get("url", ""))
+    if stage == "error":
+        state["status"] = "error"
+        state["stage"] = None
+        return state
+    state["stage"] = stage  # 'fetching' | 'translating' | None
+    if time.time() - state.get("started", 0) > SUMMARY_TIMEOUT_SEC:
+        state["status"] = "error"
+    return state
+
+
 def main():
     # Set stdin to cbreak so we can read single keys without Enter
     fd = sys.stdin.fileno()
@@ -314,51 +548,97 @@ def main():
         old = None
 
     selected_idx = 0
+    summary_state = None
+    mode = "news"
+    game_idx = 0
+
+    def render_current():
+        if mode == "games":
+            render_games(game_idx, term_cols())
+        else:
+            render(data, current_url(), term_cols(), selected_idx, summary_state)
 
     try:
         data = fetch_news()
         last_fetch = time.time()
-        render(data, current_url(), term_cols(), selected_idx)
+        summary_state = autoload_summary(data, selected_idx, summary_state)
+        render_current()
 
         while True:
             # Wait up to REFRESH_SEC for a key, then auto-refresh
             now = time.time()
             remaining = REFRESH_SEC - (now - last_fetch)
-            if remaining <= 0:
+            if mode == "news" and remaining <= 0:
                 data = fetch_news()
                 last_fetch = time.time()
                 selected_idx = max(0, min(selected_idx, items_count(data) - 1))
-                render(data, current_url(), term_cols(), selected_idx)
+                summary_state = refresh_summary_state(summary_state)
+                render_current()
                 continue
 
-            if interactive and fd_key_available(fd, min(remaining, 1.0)):
+            wait = min(max(remaining, 0.0), 1.0) if mode == "news" else 1.0
+
+            if interactive and fd_key_available(fd, wait):
                 key = read_key()
                 if key in ("q", "Q"):
                     break
+                if key in ("g", "G"):
+                    mode = "games" if mode == "news" else "news"
+                    render_current()
+                    continue
+                if mode == "games":
+                    if key == "ESC":
+                        mode = "news"
+                        render_current()
+                        continue
+                    if key in ("j", "J", "DOWN"):
+                        if GAMES:
+                            game_idx = (game_idx + 1) % len(GAMES)
+                            render_current()
+                        continue
+                    if key in ("k", "K", "UP"):
+                        if GAMES:
+                            game_idx = (game_idx - 1) % len(GAMES)
+                            render_current()
+                        continue
+                    if key in ("\r", "\n"):
+                        launch_game(game_idx, fd, old)
+                        render_current()
+                        continue
+                    continue
+                # ---- news mode ----
                 if key in ("r", "R"):
                     data = fetch_news()
                     last_fetch = time.time()
                     selected_idx = max(0, min(selected_idx, items_count(data) - 1))
-                    render(data, current_url(), term_cols(), selected_idx)
+                    summary_state = refresh_summary_state(summary_state)
+                    render_current()
                     continue
                 if key in ("j", "J", "DOWN"):
                     n = items_count(data)
                     if n:
                         selected_idx = (selected_idx + 1) % n
-                        render(data, current_url(), term_cols(), selected_idx)
+                        summary_state = autoload_summary(data, selected_idx, summary_state)
+                        render_current()
                     continue
                 if key in ("k", "K", "UP"):
                     n = items_count(data)
                     if n:
                         selected_idx = (selected_idx - 1) % n
-                        render(data, current_url(), term_cols(), selected_idx)
+                        summary_state = autoload_summary(data, selected_idx, summary_state)
+                        render_current()
+                    continue
+                if key == " ":
+                    summary_state = toggle_summary(data, selected_idx, summary_state)
+                    render_current()
                     continue
                 if key in ("\r", "\n", "o", "O"):
                     open_selected(data, selected_idx)
                     continue
             else:
-                # Tick: re-render every second to keep current marker fresh
-                render(data, current_url(), term_cols(), selected_idx)
+                if mode == "news":
+                    summary_state = refresh_summary_state(summary_state)
+                    render_current()
                 if not interactive:
                     time.sleep(1)
     finally:

@@ -51,7 +51,7 @@ for event in ["UserPromptSubmit", "Stop"]:
 # Revert statusLine if it points to code-earn wrapper
 sl = data.get("statusLine", {})
 if "code-earn-hud" in sl.get("command", ""):
-    sl["command"] = "node /Users/brandazine/.claude/hud/omc-hud.mjs"
+    sl["command"] = "node /Users/park/.claude/hud/omc-hud.mjs"
     data["statusLine"] = sl
 
 with open(path, "w") as f:

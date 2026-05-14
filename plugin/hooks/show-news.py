@@ -85,7 +85,25 @@ def pass_through():
 
 
 def detect_lang():
-    """Return 2-letter language code from env ($LANG) or 'en'."""
+    """Return 2-letter language code from the OS display-language setting.
+
+    macOS: $LANG is usually en_US.UTF-8 even when the UI runs in another
+    language, so read AppleLocale directly. Linux/other: fall back to env
+    vars and Python's locale module.
+    """
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["defaults", "read", "-g", "AppleLocale"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if out.returncode == 0:
+                code = out.stdout.strip().split("_")[0].split("-")[0].lower()
+                if code and code != "c":
+                    return code
+        except Exception:
+            pass
+
     for var in ("LANG", "LC_ALL", "LC_MESSAGES"):
         val = os.environ.get(var, "")
         if val:
@@ -229,16 +247,28 @@ def main():
     summary_lang = target_lang if translate_enabled else "en"
 
     # Prefer an item whose summary is already cached so the statusline
-    # renders the summary line instantly. Fall back to the API's pick.
+    # renders the summary line instantly. Pick *randomly* among cached
+    # candidates so consecutive prompts rotate through different items
+    # instead of locking onto the first cached one in API order. Avoid
+    # re-picking the URL that was just shown.
+    import random
+    prev_url = ""
+    if os.path.exists(CURRENT_NEWS_FILE):
+        try:
+            with open(CURRENT_NEWS_FILE) as f:
+                prev_url = (json.load(f) or {}).get("url", "") or ""
+        except Exception:
+            prev_url = ""
+
+    cached_candidates = [
+        it for it in items
+        if isinstance(it, dict) and it.get("url") and cached_summary(it["url"], summary_lang)
+    ]
+    rotatable = [it for it in cached_candidates if it.get("url") != prev_url] or cached_candidates
     pick = None
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_url = item.get("url")
-        if item_url and cached_summary(item_url, summary_lang):
-            pick = item
-            log(f"picked cached-summary item: {item.get('title','')[:50]}")
-            break
+    if rotatable:
+        pick = random.choice(rotatable)
+        log(f"picked cached-summary item: {pick.get('title','')[:50]}")
     if not pick:
         pick = api_pick or (items[0] if items else None)
     if not pick:
