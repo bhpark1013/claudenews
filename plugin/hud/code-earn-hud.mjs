@@ -49,25 +49,56 @@ if (existsSync(CONFIG_FILE)) {
   } catch {}
 }
 
-// Detect actual terminal column width when running inside cmux. Claude Code
-// doesn't pass terminal dimensions to statusline commands, but cmux exposes
-// pane geometry via its CLI — query it so the news/summary lines truncate
-// to the live column count instead of the static default.
-if (!userOverrodeMaxCols && process.env.CMUX_SOCKET && process.env.CMUX_WORKSPACE_ID) {
-  try {
-    const result = spawnSync(
-      "cmux",
-      ["rpc", "pane.list", JSON.stringify({ workspace_id: process.env.CMUX_WORKSPACE_ID })],
-      { encoding: "utf-8", timeout: 500 }
-    );
-    if (result.stdout) {
-      const data = JSON.parse(result.stdout);
-      const focused = (data.panes || []).find((p) => p.focused) || (data.panes || [])[0];
-      if (focused && typeof focused.columns === "number" && focused.columns > 20) {
-        maxCols = focused.columns;
+// Detect actual terminal column width. Claude Code doesn't pass terminal
+// dimensions to statusline commands, so we probe the surrounding
+// environment: cmux RPC → tmux display-message → stty via /dev/tty. Each
+// channel either works in its environment or fails fast.
+if (!userOverrodeMaxCols) {
+  const detected = detectTerminalCols();
+  if (detected && detected > 20) {
+    maxCols = detected;
+  }
+}
+
+function detectTerminalCols() {
+  if (process.env.CMUX_SOCKET && process.env.CMUX_WORKSPACE_ID) {
+    try {
+      const r = spawnSync(
+        "cmux",
+        ["rpc", "pane.list", JSON.stringify({ workspace_id: process.env.CMUX_WORKSPACE_ID })],
+        { encoding: "utf-8", timeout: 500 }
+      );
+      if (r.stdout) {
+        const data = JSON.parse(r.stdout);
+        const focused = (data.panes || []).find((p) => p.focused) || (data.panes || [])[0];
+        if (focused && typeof focused.columns === "number") return focused.columns;
       }
-    }
+    } catch {}
+  }
+  // Only query tmux when actually running inside one — otherwise tmux would
+  // report some unrelated session's width.
+  if (process.env.TMUX) {
+    try {
+      const r = spawnSync("tmux", ["display-message", "-p", "#{client_width}"], {
+        encoding: "utf-8",
+        timeout: 300,
+      });
+      const n = parseInt((r.stdout || "").trim(), 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {}
+  }
+  // Last-resort: statusline children usually have no controlling TTY, but
+  // when they do this is the most accurate source. Cheap to try.
+  try {
+    const r = spawnSync("sh", ["-c", "stty size < /dev/tty 2>/dev/null"], {
+      encoding: "utf-8",
+      timeout: 200,
+    });
+    const parts = (r.stdout || "").trim().split(/\s+/);
+    const n = parseInt(parts[1], 10);
+    if (Number.isFinite(n) && n > 0) return n;
   } catch {}
+  return null;
 }
 
 let newsLine = "";
