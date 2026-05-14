@@ -87,6 +87,33 @@ function detectTerminalCols() {
       if (Number.isFinite(n) && n > 0) return n;
     } catch {}
   }
+  // iTerm2 on macOS: AppleScript exposes the live column count per session.
+  // Match by ITERM_SESSION_ID's UUID suffix so multi-window users don't get
+  // a sibling window's width.
+  if (process.env.TERM_PROGRAM === "iTerm.app") {
+    const sid = process.env.ITERM_SESSION_ID || "";
+    const m = sid.match(/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/i);
+    const uuid = m ? m[0] : "";
+    const script = uuid
+      ? `tell application "iTerm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if (unique id of s) is "${uuid}" then return columns of s
+      end repeat
+    end repeat
+  end repeat
+end tell`
+      : 'tell application "iTerm2" to tell current session of current window to return columns';
+    try {
+      const r = spawnSync("osascript", ["-e", script], {
+        encoding: "utf-8",
+        timeout: 500,
+      });
+      const n = parseInt((r.stdout || "").trim(), 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {}
+  }
   // Last-resort: statusline children usually have no controlling TTY, but
   // when they do this is the most accurate source. Cheap to try.
   try {
