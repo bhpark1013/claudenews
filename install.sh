@@ -27,7 +27,7 @@ fi
 # Download HUD wrapper
 echo "  Installing status line wrapper..."
 mkdir -p "$HUD_DIR"
-curl -fsSL "$RAW_BASE/hud/code-earn-hud.mjs" -o "$HUD_FILE"
+curl -fsSL "$RAW_BASE/plugin/hud/code-earn-hud.mjs" -o "$HUD_FILE"
 chmod +x "$HUD_FILE"
 
 # Patch statusLine in settings.json (preserve existing commands, add our wrapper)
