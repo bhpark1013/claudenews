@@ -29,7 +29,25 @@ if [ -f "$SETTINGS" ]; then
 import json, sys, os, shutil
 
 path = sys.argv[1]
-shutil.copyfile(path, path + ".backup")
+backup_path = path + ".backup"
+
+# Read the install-time backup BEFORE we overwrite it, so we can restore the
+# statusLine the user had before code-earn took over.
+install_backup_sl = None
+if os.path.exists(backup_path):
+    try:
+        with open(backup_path) as f:
+            backup_data = json.load(f)
+        candidate = (backup_data or {}).get("statusLine")
+        if (
+            isinstance(candidate, dict)
+            and "code-earn-hud" not in (candidate.get("command") or "")
+        ):
+            install_backup_sl = candidate
+    except Exception:
+        pass
+
+shutil.copyfile(path, backup_path)
 
 with open(path) as f:
     data = json.load(f)
@@ -48,11 +66,15 @@ for event in ["UserPromptSubmit", "Stop"]:
         if not hooks[event]:
             del hooks[event]
 
-# Revert statusLine if it points to code-earn wrapper
+# Revert statusLine only if it still points at our wrapper. Prefer the
+# pre-install backup; otherwise drop the key so Claude Code falls back to
+# its default status line.
 sl = data.get("statusLine", {})
-if "code-earn-hud" in sl.get("command", ""):
-    sl["command"] = "node /Users/park/.claude/hud/omc-hud.mjs"
-    data["statusLine"] = sl
+if isinstance(sl, dict) and "code-earn-hud" in (sl.get("command") or ""):
+    if install_backup_sl is not None:
+        data["statusLine"] = install_backup_sl
+    else:
+        data.pop("statusLine", None)
 
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
