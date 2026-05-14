@@ -27,6 +27,19 @@ STATUS_FILE = os.path.join(CONFIG_DIR, ".summary-status.json")
 MAX_CACHE = 500
 STATUS_MAX_AGE_SEC = 120
 
+# GitHub serves this exact phrase as og:description whenever a repo has no
+# user-set description. Always reject so we don't cache a "create a GitHub
+# account" non-summary.
+GITHUB_BOILERPLATE_RE = re.compile(
+    r"Contribute to .+ development by creating an account on GitHub",
+    re.I,
+)
+
+GITHUB_REPO_URL_RE = re.compile(
+    r"^https?://github\.com/([^/\s]+)/([^/\s#?]+)",
+    re.I,
+)
+
 # Meta tags we'll look for, in priority order
 META_PATTERNS = [
     re.compile(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', re.I),
@@ -56,6 +69,94 @@ def save_cache(cache):
             json.dump(cache, f, ensure_ascii=False)
     except Exception:
         pass
+
+
+def is_likely_boilerplate(text):
+    """True for empty / GitHub default 'create an account' phrases (any language)."""
+    if not text:
+        return True
+    if GITHUB_BOILERPLATE_RE.search(text):
+        return True
+    lowered = text.lower()
+    if "github" in lowered:
+        # Translated variants we've observed in the wild.
+        if (
+            "계정" in text                    # Korean "account"
+            or "アカウント" in text            # Japanese "account"
+            or "create an account" in lowered
+            or "create a github account" in lowered
+        ):
+            return True
+    return False
+
+
+def extract_readme_excerpt(readme):
+    """First meaningful paragraph from a README, stripped of markdown noise."""
+    paragraph = []
+    for line in readme.splitlines():
+        s = line.strip()
+        if not s:
+            if paragraph:
+                break
+            continue
+        if s.startswith(("#", ">", "|", "---", "===")):
+            continue
+        if re.match(r"^!?\[", s):  # badge / image-only lines
+            continue
+        if s.startswith("<!--") or s.startswith("<img") or s.startswith("<p align"):
+            continue
+        paragraph.append(s)
+        if sum(len(l) for l in paragraph) > 400:
+            break
+    text = " ".join(paragraph)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)        # ![alt](url)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)    # [txt](url) -> txt
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"<[^>]+>", "", text)                     # html tags
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) >= 20 else ""
+
+
+def fetch_github_summary(url):
+    """For github.com/<owner>/<repo> URLs: prefer the API description, then README."""
+    m = GITHUB_REPO_URL_RE.match(url)
+    if not m:
+        return None
+    owner = m.group(1)
+    repo = re.sub(r"\.git$", "", m.group(2))
+    # Skip non-repo paths under github.com
+    if owner in ("trending", "topics", "marketplace", "search", "settings", "explore"):
+        return None
+    api = f"https://api.github.com/repos/{owner}/{repo}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "code-earn/1.0",
+    }
+    try:
+        req = urllib.request.Request(api, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return None
+    desc = (data.get("description") or "").strip()
+    if desc and not is_likely_boilerplate(desc):
+        return desc
+    # description blank or junk -> fall back to README excerpt
+    try:
+        req = urllib.request.Request(
+            f"{api}/readme",
+            headers={**headers, "Accept": "application/vnd.github.raw"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            readme = resp.read(50_000).decode("utf-8", errors="replace")
+        excerpt = extract_readme_excerpt(readme)
+        if excerpt and not is_likely_boilerplate(excerpt):
+            return excerpt
+    except Exception:
+        pass
+    return None
 
 
 def fetch_meta_description(url):
@@ -88,6 +189,8 @@ def fetch_meta_description(url):
                     .replace("&nbsp;", " "))
             # Collapse whitespace
             desc = re.sub(r"\s+", " ", desc)
+            if is_likely_boilerplate(desc):
+                continue  # try the next meta tag
             if 20 <= len(desc) <= 500:
                 return desc
     return None
@@ -223,17 +326,18 @@ def main():
     cache = load_cache()
     if key in cache:
         summary = cache[key].get("summary")
-        if summary:
+        if summary and not is_likely_boilerplate(summary):
             update_current_news(original_title, summary)
-        sys.exit(0)
+            sys.exit(0)
+        # else: stale boilerplate cached previously — fall through to regenerate
 
     if not acquire_lock_for(key):
         sys.exit(0)
 
     try:
         write_status(url, "fetching")
-        raw_desc = fetch_meta_description(url)
-        if not raw_desc:
+        raw_desc = fetch_github_summary(url) or fetch_meta_description(url)
+        if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return
 
