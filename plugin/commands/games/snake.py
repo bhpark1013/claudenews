@@ -22,7 +22,7 @@ GREY = CSI + "90m"
 CLEAR = CSI + "2J" + CSI + "H"
 
 TICK_SEC = 0.12
-BEST_FILE = os.path.expanduser("~/.code-earn/.snake-best")
+BEST_FILE = os.path.expanduser("~/.claudenews/.snake-best")
 
 
 def grid_size():

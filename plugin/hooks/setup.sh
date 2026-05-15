@@ -1,10 +1,10 @@
 #!/bin/bash
-# Setup script for code-earn plugin
+# Setup script for claudenews plugin
 # Run: bash setup.sh
 
-CONFIG_DIR="$HOME/.code-earn"
+CONFIG_DIR="$HOME/.claudenews"
 CONFIG_FILE="$CONFIG_DIR/config.json"
-API_URL="${CODE_EARN_API_URL:-https://code-earn.vercel.app}"
+API_URL="${CODE_EARN_API_URL:-https://claudenews.vercel.app}"
 
 echo ""
 echo "  Code\033[32mEarn\033[0m - AI 에이전트 대기 중 수익 적립"

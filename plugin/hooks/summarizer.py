@@ -19,7 +19,7 @@ from background_claude import (
     summarize_process_error,
 )
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CACHE_FILE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 LOCK_FILE = os.path.join(CONFIG_DIR, ".summarizer.lock")
@@ -90,6 +90,73 @@ def is_likely_boilerplate(text):
     return False
 
 
+# Haiku occasionally refuses to summarize when the raw description is short or
+# truncated, and returns an English meta reply instead of an actual summary.
+# Reject those so they don't get cached as the "translation".
+_META_REFUSAL_PHRASES = (
+    "i need the complete",
+    "i need more",
+    "could you please",
+    "could you share",
+    "could you provide",
+    "please share",
+    "please provide",
+    "more context",
+    "appears to be cut off",
+    "appears to be truncated",
+    "i cannot summarize",
+    "i don't have",
+    "i don't see",
+    "i do not see",
+)
+
+
+def looks_like_meta_refusal(text):
+    if not text:
+        return True
+    lowered = text.lower()
+    return any(p in lowered for p in _META_REFUSAL_PHRASES)
+
+
+def has_target_language(text, target_lang):
+    """Reject outputs that aren't actually in the requested script."""
+    if not text:
+        return False
+    if target_lang in ("en", "es", "fr", "de", "it", "pt", "pl", "tr", "vi", "id"):
+        return True  # Latin-based — skip script check
+    total = sum(1 for c in text if not c.isspace())
+    if not total:
+        return False
+
+    def _ratio(predicate):
+        return sum(1 for c in text if predicate(c)) / total
+
+    if target_lang == "ko":
+        return _ratio(lambda c: "가" <= c <= "힣") >= 0.3
+    if target_lang == "ja":
+        return _ratio(
+            lambda c: ("぀" <= c <= "ゟ")
+            or ("゠" <= c <= "ヿ")
+            or ("一" <= c <= "鿿")
+        ) >= 0.3
+    if target_lang == "zh":
+        return _ratio(lambda c: "一" <= c <= "鿿") >= 0.3
+    if target_lang == "ru":
+        return _ratio(lambda c: "Ѐ" <= c <= "ӿ") >= 0.3
+    if target_lang == "th":
+        return _ratio(lambda c: "฀" <= c <= "๿") >= 0.3
+    return True
+
+
+def is_bad_summary(text, target_lang):
+    """Single gate covering every reason we shouldn't trust a summary."""
+    return (
+        is_likely_boilerplate(text)
+        or looks_like_meta_refusal(text)
+        or not has_target_language(text, target_lang)
+    )
+
+
 def extract_readme_excerpt(readme):
     """First meaningful paragraph from a README, stripped of markdown noise."""
     paragraph = []
@@ -132,7 +199,7 @@ def fetch_github_summary(url):
     api = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "code-earn/1.0",
+        "User-Agent": "claudenews/1.0",
     }
     try:
         req = urllib.request.Request(api, headers=headers)
@@ -163,7 +230,7 @@ def fetch_meta_description(url):
     """Fetch URL and extract best meta description (og:description > twitter > description)."""
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 code-earn/1.0",
+            "User-Agent": "Mozilla/5.0 claudenews/1.0",
         })
         with urllib.request.urlopen(req, timeout=5) as resp:
             ctype = resp.headers.get("Content-Type", "")
@@ -220,8 +287,14 @@ def translate_summary(text, target_lang):
                 f"summarizer rejected error-looking output ({target_lang}): {out[:80]}"
             )
             return None
-        if 10 <= len(out) <= 800:
-            return out
+        if not (10 <= len(out) <= 800):
+            return None
+        if is_bad_summary(out, target_lang):
+            log_background_event(
+                f"summarizer rejected bad output ({target_lang}): {out[:80]}"
+            )
+            return None
+        return out
     except Exception as exc:
         log_background_event(f"summarizer exception ({target_lang}): {exc}")
     return None
@@ -326,10 +399,10 @@ def main():
     cache = load_cache()
     if key in cache:
         summary = cache[key].get("summary")
-        if summary and not is_likely_boilerplate(summary):
+        if summary and not is_bad_summary(summary, target_lang):
             update_current_news(original_title, summary)
             sys.exit(0)
-        # else: stale boilerplate cached previously — fall through to regenerate
+        # else: stale/bad summary cached previously — fall through to regenerate
 
     if not acquire_lock_for(key):
         sys.exit(0)
@@ -340,12 +413,21 @@ def main():
         if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return
+        # Too thin to summarize meaningfully — Haiku tends to return a meta
+        # refusal instead of a real summary when the source is this short.
+        if len(raw_desc.strip()) < 40:
+            write_status(url, "error")
+            return
 
         if target_lang == "en":
             summary = raw_desc
         else:
             write_status(url, "translating")
-            summary = translate_summary(raw_desc, target_lang) or raw_desc
+            summary = translate_summary(raw_desc, target_lang)
+            if not summary or is_bad_summary(summary, target_lang):
+                # Don't cache an English/refusal as a "ko" translation.
+                write_status(url, "error")
+                return
 
         # Trim summary to something reasonable
         if len(summary) > 600:

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Toggle / configure code-earn translation.
+# Toggle / configure claudenews translation.
 # Usage: translate.sh [on|off|<lang-code>]
 
 set -e
 
-CONFIG_DIR="$HOME/.code-earn"
+CONFIG_DIR="$HOME/.claudenews"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 
 mkdir -p "$CONFIG_DIR"

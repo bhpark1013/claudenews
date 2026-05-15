@@ -8,14 +8,14 @@ import os
 import subprocess
 from typing import Any
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CLAUDE_SETTINGS_FILE = os.path.expanduser("~/.claude/settings.json")
 HOOK_LOG_FILE = os.path.join(CONFIG_DIR, "hook.log")
 BACKGROUND_CHILD_ENV = "CODE_EARN_BACKGROUND_CHILD"
 DEFAULT_BACKGROUND_MODEL = "haiku"
 FALLBACK_PLUGIN_IDS = (
-    "code-earn@code-earn",
+    "claudenews@claudenews",
     "oh-my-claudecode@omc",
 )
 
@@ -138,7 +138,7 @@ _AUTH_ERROR_MARKERS = (
 def atomic_write_json(path: str, data: Any) -> None:
     """Write JSON to path atomically so concurrent readers never see a
     half-written or empty file. Important: show-news, translator, and
-    summarizer all rewrite ~/.code-earn/.current-news, and the statusline
+    summarizer all rewrite ~/.claudenews/.current-news, and the statusline
     HUD reads it on every render. Truncate-then-write would briefly expose
     an empty file."""
     tmp = f"{path}.tmp.{os.getpid()}"

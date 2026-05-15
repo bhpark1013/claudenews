@@ -15,7 +15,7 @@ from background_claude import (
     build_background_env,
 )
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 LAST_OPEN_FILE = os.path.join(CONFIG_DIR, ".last_open")

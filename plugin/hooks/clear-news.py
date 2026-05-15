@@ -7,7 +7,7 @@ import sys
 import time
 import urllib.request
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 SESSION_FILE = os.path.join(CONFIG_DIR, ".current_session")

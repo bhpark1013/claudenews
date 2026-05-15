@@ -31,7 +31,7 @@ import urllib.request
 import webbrowser
 
 API_URL = "https://web-olive-three-47.vercel.app/api/news?limit=50"
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CURRENT_NEWS = os.path.join(CONFIG_DIR, ".current-news")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
@@ -260,7 +260,7 @@ def short_url(url):
 def render(data, current, cols, selected_idx=0, summary_state=None):
     clear()
     header = (
-        f"{BOLD}{CYAN}  code-earn feed{RESET}  "
+        f"{BOLD}{CYAN}  claudenews feed{RESET}  "
         f"{DIM}↑↓/jk select · enter/o open · space summary · r refresh · q quit{RESET}"
     )
     print(header)
@@ -417,7 +417,7 @@ SUMMARY_TIMEOUT_SEC = 35
 def render_games(selected_idx, cols, msg=""):
     clear()
     header = (
-        f"{BOLD}{CYAN}  code-earn games{RESET}  "
+        f"{BOLD}{CYAN}  claudenews games{RESET}  "
         f"{DIM}↑↓/jk select · enter launch · g/esc back · q quit{RESET}"
     )
     print(header)

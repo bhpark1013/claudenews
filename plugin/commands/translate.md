@@ -6,10 +6,10 @@ allowed-tools: Bash(bash:*)
 
 Control news title translation.
 
-- `/code-earn:translate` — toggle on/off
-- `/code-earn:translate on` — enable
-- `/code-earn:translate off` — disable
-- `/code-earn:translate ko` (or `ja`, `zh`, `es`, etc.) — enable + set target language
+- `/claudenews:translate` — toggle on/off
+- `/claudenews:translate on` — enable
+- `/claudenews:translate off` — disable
+- `/claudenews:translate ko` (or `ja`, `zh`, `es`, etc.) — enable + set target language
 
 Raw slash-command arguments: `$ARGUMENTS`
 

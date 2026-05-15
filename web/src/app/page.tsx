@@ -170,7 +170,7 @@ export default function Home() {
       <header className="fixed top-0 inset-x-0 z-50 border-b border-zinc-900/80 bg-zinc-950/90 backdrop-blur-sm">
         <div className="max-w-5xl mx-auto px-6 h-13 flex items-center justify-between">
           <span className="font-mono text-sm font-semibold text-zinc-200 tracking-tight">
-            code-earn
+            claudenews
           </span>
           <div className="flex items-center gap-4">
             <LangToggle />
@@ -212,7 +212,7 @@ export default function Home() {
 
               <div className="flex flex-col sm:flex-row items-start gap-3" id="install">
                 <a
-                  href="https://github.com/bhpark1013/code-earn"
+                  href="https://github.com/bhpark1013/claudenews"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 h-10 px-5 rounded bg-zinc-200 hover:bg-white text-zinc-900 text-sm font-semibold transition-colors"
@@ -306,11 +306,11 @@ export default function Home() {
               </p>
             </div>
 
-            <CopySnippet code="curl -fsSL https://raw.githubusercontent.com/bhpark1013/code-earn/main/install.sh | bash" />
+            <CopySnippet code="curl -fsSL https://raw.githubusercontent.com/bhpark1013/claudenews/main/install.sh | bash" />
 
             <div className="flex items-center gap-4 pt-1">
               <a
-                href="https://github.com/bhpark1013/code-earn"
+                href="https://github.com/bhpark1013/claudenews"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 h-9 px-4 rounded bg-zinc-200 hover:bg-white text-zinc-900 text-sm font-semibold transition-colors"
@@ -331,7 +331,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-zinc-900 py-8 px-6 mt-auto">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <span className="font-mono text-xs text-zinc-700">code-earn</span>
+          <span className="font-mono text-xs text-zinc-700">claudenews</span>
           <div className="flex gap-5 text-xs text-zinc-700">
             <a href="#" className="hover:text-zinc-400 transition-colors">
               {t("footer_privacy")}

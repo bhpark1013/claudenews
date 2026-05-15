@@ -157,7 +157,7 @@ def read_key(fd):
     return "ESC"
 
 
-BEST_FILE = os.path.expanduser("~/.code-earn/.2048-best")
+BEST_FILE = os.path.expanduser("~/.claudenews/.2048-best")
 
 
 def load_best():

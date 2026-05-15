@@ -21,7 +21,7 @@ from background_claude import (
     summarize_process_error,
 )
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CACHE_FILE = os.path.join(CONFIG_DIR, ".translation-cache.json")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 LOCK_FILE = os.path.join(CONFIG_DIR, ".translator.lock")

@@ -1,10 +1,10 @@
 #!/bin/bash
-# code-earn statusLine teardown
-# Runs via /code-earn:teardown slash command. Idempotent.
+# claudenews statusLine teardown
+# Runs via /claudenews:teardown slash command. Idempotent.
 
 set -e
 
-DST_HUD="$HOME/.claude/hud/code-earn-hud.mjs"
+DST_HUD="$HOME/.claude/hud/claudenews-hud.mjs"
 SETTINGS="$HOME/.claude/settings.json"
 OMC_HUD="$HOME/.claude/hud/omc-hud.mjs"
 
@@ -18,7 +18,7 @@ shutil.copyfile(path, path + ".backup")
 with open(path) as f:
     data = json.load(f)
 current = data.get("statusLine", {}).get("command", "")
-if "code-earn-hud" in current:
+if "claudenews-hud" in current:
     if os.path.exists(fallback):
         data["statusLine"] = {"type": "command", "command": f"node {fallback}"}
         print(f"  statusLine reverted to OMC HUD")
@@ -34,7 +34,7 @@ PY
 fi
 
 # Clean runtime state
-rm -rf "$HOME/.code-earn"
+rm -rf "$HOME/.claudenews"
 
 echo ""
-echo "  Done. You can now /plugin remove code-earn if you want to fully uninstall."
+echo "  Done. You can now /plugin remove claudenews if you want to fully uninstall."

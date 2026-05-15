@@ -6,7 +6,7 @@ import os
 import sys
 import urllib.request
 
-CONFIG_DIR = os.path.expanduser("~/.code-earn")
+CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_API = "https://web-olive-three-47.vercel.app"

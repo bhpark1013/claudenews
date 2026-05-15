@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the code-earn news viewer.
+# Launch the claudenews news viewer.
 # Preference order:
 #   1. tmux split (if inside tmux)
 #   2. Native terminal split (WezTerm / Kitty / iTerm2)

@@ -192,13 +192,13 @@ export default function Dashboard() {
   }, [apiKey]);
 
   useEffect(() => {
-    const saved = localStorage.getItem("code-earn-api-key");
+    const saved = localStorage.getItem("claudenews-api-key");
     if (saved) setApiKey(saved);
   }, []);
 
   useEffect(() => {
     if (apiKey) {
-      localStorage.setItem("code-earn-api-key", apiKey);
+      localStorage.setItem("claudenews-api-key", apiKey);
       fetchEarnings();
     }
   }, [apiKey, fetchEarnings]);
@@ -730,7 +730,7 @@ export default function Dashboard() {
                       </div>
                       <button
                         onClick={() => {
-                          localStorage.removeItem("code-earn-api-key");
+                          localStorage.removeItem("claudenews-api-key");
                           setApiKey("");
                           setData(null);
                         }}

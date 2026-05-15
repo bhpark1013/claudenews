@@ -1,17 +1,17 @@
 #!/bin/bash
 # CodeEarn uninstaller
-# Usage: curl -fsSL https://raw.githubusercontent.com/bhpark1013/code-earn/main/uninstall.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/bhpark1013/claudenews/main/uninstall.sh | bash
 
 set -e
 
-PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/custom/code-earn"
-CONFIG_DIR="$HOME/.code-earn"
+PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/custom/claudenews"
+CONFIG_DIR="$HOME/.claudenews"
 SETTINGS="$HOME/.claude/settings.json"
-HUD_FILE="$HOME/.claude/hud/code-earn-hud.mjs"
+HUD_FILE="$HOME/.claude/hud/claudenews-hud.mjs"
 FEED_CMD="$HOME/.claude/commands/feed.md"
 
 echo ""
-echo "  code-earn uninstaller"
+echo "  claudenews uninstaller"
 echo "  ---------------------"
 echo ""
 
@@ -22,7 +22,7 @@ rm -rf "$CONFIG_DIR"
 rm -f "$HUD_FILE"
 rm -f "$FEED_CMD"
 
-# Patch settings.json: remove code-earn hooks and revert statusLine
+# Patch settings.json: remove claudenews hooks and revert statusLine
 if [ -f "$SETTINGS" ]; then
   echo "  Cleaning settings.json..."
   python3 - "$SETTINGS" <<'PY'
@@ -32,7 +32,7 @@ path = sys.argv[1]
 backup_path = path + ".backup"
 
 # Read the install-time backup BEFORE we overwrite it, so we can restore the
-# statusLine the user had before code-earn took over.
+# statusLine the user had before claudenews took over.
 install_backup_sl = None
 if os.path.exists(backup_path):
     try:
@@ -41,7 +41,7 @@ if os.path.exists(backup_path):
         candidate = (backup_data or {}).get("statusLine")
         if (
             isinstance(candidate, dict)
-            and "code-earn-hud" not in (candidate.get("command") or "")
+            and "claudenews-hud" not in (candidate.get("command") or "")
         ):
             install_backup_sl = candidate
     except Exception:
@@ -55,7 +55,7 @@ with open(path) as f:
 def is_code_earn(hook_entry):
     for h in hook_entry.get("hooks", []):
         cmd = h.get("command", "")
-        if "code-earn" in cmd or "show-news.py" in cmd or "clear-news.py" in cmd or "show-ad.py" in cmd or "report-session.py" in cmd:
+        if "claudenews" in cmd or "show-news.py" in cmd or "clear-news.py" in cmd or "show-ad.py" in cmd or "report-session.py" in cmd:
             return True
     return False
 
@@ -70,7 +70,7 @@ for event in ["UserPromptSubmit", "Stop"]:
 # pre-install backup; otherwise drop the key so Claude Code falls back to
 # its default status line.
 sl = data.get("statusLine", {})
-if isinstance(sl, dict) and "code-earn-hud" in (sl.get("command") or ""):
+if isinstance(sl, dict) and "claudenews-hud" in (sl.get("command") or ""):
     if install_backup_sl is not None:
         data["statusLine"] = install_backup_sl
     else:

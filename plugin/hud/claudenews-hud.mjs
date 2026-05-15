@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * code-earn statusline.
+ * claudenews statusline.
  *
- * Renders the current dev-news item from ~/.code-earn/.current-news.
+ * Renders the current dev-news item from ~/.claudenews/.current-news.
  * Optionally chains an upstream statusline command set in
- * ~/.code-earn/config.json under `parentStatusLine` — its stdout is
+ * ~/.claudenews/config.json under `parentStatusLine` — its stdout is
  * prepended so users can keep their existing statusline (OMC HUD, git
  * status, custom script, …) above the news block.
  *
@@ -17,8 +17,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const HOME = homedir();
-const CONFIG_FILE = join(HOME, ".code-earn/config.json");
-const NEWS_FILE = join(HOME, ".code-earn/.current-news");
+const CONFIG_FILE = join(HOME, ".claudenews/config.json");
+const NEWS_FILE = join(HOME, ".claudenews/.current-news");
 const NEWS_TTL_SEC = 3600;
 
 let stdinData = "";

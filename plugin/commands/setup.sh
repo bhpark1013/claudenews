@@ -1,20 +1,20 @@
 #!/bin/bash
-# code-earn statusLine wiring
-# Runs via /code-earn:setup slash command. Idempotent.
+# claudenews statusLine wiring
+# Runs via /claudenews:setup slash command. Idempotent.
 #
 # If the user already has a statusLine command pointing at something else
 # (e.g. OMC HUD, a custom script), it is preserved by writing it to
-# ~/.code-earn/config.json under `parentStatusLine` so the news HUD can
+# ~/.claudenews/config.json under `parentStatusLine` so the news HUD can
 # chain it instead of replacing it.
 
 set -e
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-SRC_HUD="$PLUGIN_ROOT/hud/code-earn-hud.mjs"
+SRC_HUD="$PLUGIN_ROOT/hud/claudenews-hud.mjs"
 DST_HUD_DIR="$HOME/.claude/hud"
-DST_HUD="$DST_HUD_DIR/code-earn-hud.mjs"
+DST_HUD="$DST_HUD_DIR/claudenews-hud.mjs"
 SETTINGS="$HOME/.claude/settings.json"
-CONFIG_DIR="$HOME/.code-earn"
+CONFIG_DIR="$HOME/.claudenews"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 
 if [ ! -f "$SRC_HUD" ]; then
@@ -38,8 +38,8 @@ with open(settings_path) as f:
 
 current = settings.get("statusLine", {}).get("command", "")
 
-if "code-earn-hud" in current:
-    print("  statusLine already points at code-earn-hud — no change")
+if "claudenews-hud" in current:
+    print("  statusLine already points at claudenews-hud — no change")
 else:
     if current.strip():
         # Preserve the existing statusline command as the parent so the
