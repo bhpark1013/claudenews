@@ -39,7 +39,9 @@ async function fetchHackerNews(): Promise<NewsItem[]> {
       .map((s) => ({
         id: `hn-${s.id}`,
         title: s.title,
-        url: s.url,
+        // Open the HN discussion thread rather than the external article —
+        // the comments are the point of Hacker News.
+        url: `https://news.ycombinator.com/item?id=${s.id}`,
         source: "HackerNews",
         score: s.score,
         comments: s.descendants,

@@ -40,6 +40,27 @@ GITHUB_REPO_URL_RE = re.compile(
     re.I,
 )
 
+HN_ITEM_RE = re.compile(r"news\.ycombinator\.com/item\?id=(\d+)", re.I)
+
+
+def resolve_hn_article_url(url):
+    """The news URL now points at the HN discussion thread (no usable
+    og:description). Resolve the original article URL via the HN API so we
+    can still summarize the actual content. Returns None for Ask/Show HN
+    text posts (no external link)."""
+    m = HN_ITEM_RE.search(url)
+    if not m:
+        return None
+    try:
+        api = f"https://hacker-news.firebaseio.com/v0/item/{m.group(1)}.json"
+        req = urllib.request.Request(api, headers={"User-Agent": "claudenews/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        article = (data or {}).get("url")
+        return article if article else None
+    except Exception:
+        return None
+
 # Meta tags we'll look for, in priority order
 META_PATTERNS = [
     re.compile(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', re.I),
@@ -417,7 +438,10 @@ def main():
         if GITHUB_REPO_URL_RE.match(url):
             raw_desc = fetch_github_summary(url)
         else:
-            raw_desc = fetch_meta_description(url)
+            # HN news URLs now point at the discussion thread (no
+            # og:description). Summarize the linked article instead.
+            article_url = resolve_hn_article_url(url)
+            raw_desc = fetch_meta_description(article_url or url)
         if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return
