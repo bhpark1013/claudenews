@@ -160,13 +160,36 @@ def launch_translator(title, target_lang):
         log(f"translator launch failed: {e}")
 
 
+def _is_github_boilerplate(text):
+    """Guard against stale 'create an account on GitHub' summaries that may
+    still sit in an old cache file. The summarizer no longer writes these,
+    but a pre-existing cache entry shouldn't reach the status line."""
+    if not text:
+        return False
+    import re as _re
+    if _re.search(
+        r"Contribute to .+ development by creating an account on GitHub",
+        text, _re.I,
+    ):
+        return True
+    low = text.lower()
+    if "github" in low and (
+        "계정" in text or "アカウント" in text or "create an account" in low
+    ):
+        return True
+    return False
+
+
 def cached_summary(url, target_lang):
     if not os.path.exists(SUMMARY_CACHE):
         return None
     try:
         with open(SUMMARY_CACHE) as f:
             cache = json.load(f)
-        return cache.get(f"{target_lang}::{url}", {}).get("summary")
+        summary = cache.get(f"{target_lang}::{url}", {}).get("summary")
+        if summary and _is_github_boilerplate(summary):
+            return None  # treat as a cache miss so it gets regenerated
+        return summary
     except Exception:
         return None
 

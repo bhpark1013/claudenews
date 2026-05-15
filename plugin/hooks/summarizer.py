@@ -409,7 +409,15 @@ def main():
 
     try:
         write_status(url, "fetching")
-        raw_desc = fetch_github_summary(url) or fetch_meta_description(url)
+        # GitHub serves og:description as "<real desc>. Contribute to
+        # <owner>/<repo> development by creating an account on GitHub." even
+        # when the repo HAS a description, so the meta tag is never
+        # trustworthy for github.com repos. Use the API only; if it fails
+        # (e.g. rate limit) we'd rather show no summary than the boilerplate.
+        if GITHUB_REPO_URL_RE.match(url):
+            raw_desc = fetch_github_summary(url)
+        else:
+            raw_desc = fetch_meta_description(url)
         if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return
