@@ -27,11 +27,13 @@ Inside Claude Code:
 ```
 /plugin marketplace add bhpark1013/claudenews
 /plugin install claudenews@claudenews
+/reload-plugins
 /claudenews:setup
 ```
 
-Restart Claude Code. That's it — the next time the agent thinks, a news item
-rotates into your status line.
+`/reload-plugins` activates the hooks and slash commands without a full
+restart. Then restart Claude Code once so the status line takes effect —
+the next time the agent thinks, a news item rotates in.
 
 ## Why you might want this
 
