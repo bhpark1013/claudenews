@@ -159,7 +159,10 @@ if (existsSync(NEWS_FILE)) {
         // "       ↳ " prefix is 9 display cols; continuation lines indent
         // 9 spaces so wrapped text stays aligned under the first line.
         const innerWidth = Math.max(20, maxCols - 9);
-        const wrapped = wrapCols(summary, innerWidth, 4);
+        // Summaries are already capped at ~600 chars upstream, so a high
+        // line cap means a normal summary is never truncated here — the …
+        // only appears for pathologically long text on a very narrow pane.
+        const wrapped = wrapCols(summary, innerWidth, 12);
         wrapped.forEach((ln, i) => {
           if (i === 0) {
             newsLine += `\n\x1b[90m       ↳\x1b[0m \x1b[2m${ln}\x1b[0m`;
