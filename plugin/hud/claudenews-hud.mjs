@@ -156,9 +156,17 @@ if (existsSync(NEWS_FILE)) {
 
       const summary = (raw.summary || "").trim();
       if (summary) {
-        // 8 cols for the "       ↳ " prefix
-        const summaryText = truncateCols(summary, Math.max(20, maxCols - 8));
-        newsLine += `\n\x1b[90m       ↳\x1b[0m \x1b[2m${summaryText}\x1b[0m`;
+        // "       ↳ " prefix is 9 display cols; continuation lines indent
+        // 9 spaces so wrapped text stays aligned under the first line.
+        const innerWidth = Math.max(20, maxCols - 9);
+        const wrapped = wrapCols(summary, innerWidth, 4);
+        wrapped.forEach((ln, i) => {
+          if (i === 0) {
+            newsLine += `\n\x1b[90m       ↳\x1b[0m \x1b[2m${ln}\x1b[0m`;
+          } else {
+            newsLine += `\n         \x1b[2m${ln}\x1b[0m`;
+          }
+        });
       }
     }
   } catch {}
@@ -193,6 +201,31 @@ function truncateCols(s, maxCols) {
     cols += w;
   }
   return out;
+}
+
+// Wrap text to `width` display cols across at most `maxLines` lines. Char-
+// based (not word-based) so CJK summaries wrap cleanly; the final line gets
+// a … if the text didn't fit in maxLines.
+function wrapCols(s, width, maxLines) {
+  if (!s) return [];
+  const all = [];
+  let cur = "";
+  let cols = 0;
+  for (const ch of s) {
+    const w = charCols(ch.codePointAt(0));
+    if (cols + w > width) {
+      all.push(cur);
+      cur = "";
+      cols = 0;
+    }
+    cur += ch;
+    cols += w;
+  }
+  if (cur) all.push(cur);
+  if (all.length <= maxLines) return all;
+  const kept = all.slice(0, maxLines);
+  kept[maxLines - 1] = kept[maxLines - 1].replace(/.$/u, "") + "…";
+  return kept;
 }
 
 if (parentOutput) {
