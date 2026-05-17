@@ -12,7 +12,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,27 @@ const HOME = homedir();
 const CONFIG_FILE = join(HOME, ".claudenews/config.json");
 const NEWS_FILE = join(HOME, ".claudenews/.current-news");
 const NEWS_TTL_SEC = 3600;
+
+// Read the installed plugin version from the cache dir (folder name == ver)
+// so the label tracks updates without editing this file every release.
+function detectVersion() {
+  try {
+    const dir = join(HOME, ".claude/plugins/cache/claudenews/claudenews");
+    const vers = readdirSync(dir).filter((v) => /^\d+\.\d+\.\d+/.test(v));
+    if (!vers.length) return "";
+    vers.sort((a, b) => {
+      const pa = a.split(".").map(Number);
+      const pb = b.split(".").map(Number);
+      return pb[0] - pa[0] || pb[1] - pa[1] || pb[2] - pa[2];
+    });
+    return vers[0];
+  } catch {
+    return "";
+  }
+}
+
+const _VER = detectVersion();
+const FEED_LABEL = _VER ? `[claude-news#${_VER}]` : "[claude-news]";
 
 let stdinData = "";
 try {
@@ -147,7 +168,7 @@ if (existsSync(NEWS_FILE)) {
         : `\x1b[37m${title}\x1b[0m`;
 
       newsLine =
-        `\x1b[90m[feed]\x1b[0m ` +
+        `\x1b[1m${FEED_LABEL}\x1b[0m ` +
         `\x1b[36m${source}\x1b[0m ` +
         `\x1b[2m│\x1b[0m ` +
         titleStyled +
