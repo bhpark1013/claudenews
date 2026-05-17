@@ -99,9 +99,9 @@ npm install
 npm run dev
 ```
 
-Backend is Next.js 16 + Vercel + Supabase. The hot path is `/api/news` —
-it interleaves HN top stories and GitHub Trending, cached 5min in-memory
-per function instance.
+Backend is a single stateless Next.js 16 route on Vercel. `/api/news`
+interleaves HN top stories and GitHub Trending, cached 5min in-memory
+per function instance. No database, no accounts, no tracking.
 
 ## License
 

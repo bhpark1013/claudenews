@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { useT } from "@/lib/i18n";
 
 // ─── Terminal Animation ───────────────────────────────────────────────────────
@@ -174,12 +173,6 @@ export default function Home() {
           </span>
           <div className="flex items-center gap-4">
             <LangToggle />
-            <Link
-              href="/dashboard"
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-            >
-              {t("nav_login")}
-            </Link>
             <a
               href="#install"
               className="text-xs font-medium text-zinc-900 bg-zinc-200 hover:bg-white px-3 py-1.5 rounded transition-colors"
@@ -317,12 +310,6 @@ export default function Home() {
               >
                 GitHub
               </a>
-              <Link
-                href="/dashboard"
-                className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                {t("footer_dashboard")}
-              </Link>
             </div>
           </div>
         </section>

@@ -19,8 +19,6 @@ CONFIG_DIR = os.path.expanduser("~/.claudenews")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 LAST_OPEN_FILE = os.path.join(CONFIG_DIR, ".last_open")
-SESSION_FILE = os.path.join(CONFIG_DIR, ".current_session")
-START_FILE = os.path.join(CONFIG_DIR, ".session_start")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 LOG_FILE = os.path.join(CONFIG_DIR, "hook.log")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
@@ -234,7 +232,7 @@ def main():
     enabled = True
     api_url = DEFAULT_API
     if config:
-        enabled = config.get("newsEnabled", config.get("enabled", True))
+        enabled = config.get("newsEnabled", True)
         api_url = config.get("apiUrl", DEFAULT_API)
 
     if not enabled:
@@ -248,15 +246,6 @@ def main():
         return
 
     save_timestamp()
-
-    # Track session for analytics (optional)
-    if config and config.get("userId"):
-        import uuid
-        session_id = str(uuid.uuid4())
-        with open(SESSION_FILE, "w") as f:
-            f.write(session_id)
-        with open(START_FILE, "w") as f:
-            f.write(str(time.time()))
 
     response = fetch_news(api_url)
     items = (response or {}).get("items") or []

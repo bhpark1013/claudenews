@@ -5,8 +5,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from typing import Any
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def sanitize_model_output(text: str) -> str:
+    """Strip ANSI escape sequences and control chars from model output
+    before it is cached or rendered. Untrusted web content flows into the
+    background prompt, so a crafted article could try to emit terminal
+    escape sequences through the summary/translation into the status line."""
+    if not text:
+        return ""
+    text = _ANSI_RE.sub("", text)
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
