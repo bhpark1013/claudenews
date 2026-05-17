@@ -10,6 +10,8 @@ import re
 import sys
 import time
 import urllib.request
+from html import unescape as _html_unescape
+from html.parser import HTMLParser as _HTMLParser
 
 from background_claude import (
     atomic_write_json,
@@ -247,6 +249,80 @@ def fetch_github_summary(url):
     return None
 
 
+class _ArticleExtractor(_HTMLParser):
+    """Pull readable prose out of an article page using only stdlib.
+
+    Skips chrome (script/style/nav/header/footer/aside/form), collects text
+    inside block elements, and keeps only paragraph-ish chunks so menus and
+    one-word links don't pollute the summary input."""
+
+    _SKIP = {
+        "script", "style", "noscript", "nav", "header", "footer",
+        "aside", "form", "figure", "button", "template",
+    }
+    _BLOCK = {"p", "article", "section", "li", "h1", "h2", "h3", "blockquote"}
+
+    def __init__(self):
+        super().__init__()
+        self._skip_depth = 0
+        self._chunks = []
+        self._cur = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip_depth > 0:
+            self._skip_depth -= 1
+        elif tag in self._BLOCK and self._cur:
+            chunk = " ".join(self._cur).strip()
+            if chunk:
+                self._chunks.append(chunk)
+            self._cur = []
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            s = data.strip()
+            if s:
+                self._cur.append(s)
+
+    def text(self):
+        if self._cur:
+            self._chunks.append(" ".join(self._cur).strip())
+        # Keep prose-like paragraphs only (drop nav crumbs / one-liners).
+        return "\n".join(c for c in self._chunks if len(c) >= 40)
+
+
+def fetch_article_text(url, max_chars=3000):
+    """Extract the article body so the summary is built from real content
+    instead of a one-line og:description. Returns None when there's too
+    little usable text, so the caller can fall back to the meta tag."""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 claudenews/1.0",
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            if "html" not in ctype.lower():
+                return None
+            raw = resp.read(800_000)
+        html = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    try:
+        parser = _ArticleExtractor()
+        parser.feed(html)
+        text = _html_unescape(parser.text())
+    except Exception:
+        return None
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text).strip()
+    if len(text) < 200:  # too thin to beat the og:description path
+        return None
+    return text[:max_chars]
+
+
 def fetch_meta_description(url):
     """Fetch URL and extract best meta description (og:description > twitter > description)."""
     try:
@@ -291,9 +367,13 @@ def translate_summary(text, target_lang):
     }.get(target_lang, target_lang)
 
     prompt = (
-        f"Summarize the following article description in exactly three short sentences in {lang_name}. "
-        f"Keep technical terms in English. Output ONLY the summary as plain sentences separated by spaces, "
-        f"no prefix, no quotes, no bullet points:\n\n{text}"
+        f"Summarize the following article in {lang_name}, in 1 to 3 sentences. "
+        f"Be concise and strictly factual: state only what the text actually "
+        f"says. Do NOT pad, do NOT repeat the same point in different words, "
+        f"and do NOT invent details not present in the text. If the text is "
+        f"too thin to summarize, output a single faithful sentence. Keep "
+        f"technical terms in English. Output ONLY the summary, no prefix, no "
+        f"quotes, no bullet points:\n\n{text}"
     )
     try:
         result = run_background_prompt(prompt, task_name="summary", timeout=30)
@@ -441,7 +521,10 @@ def main():
             # HN news URLs now point at the discussion thread (no
             # og:description). Summarize the linked article instead.
             article_url = resolve_hn_article_url(url)
-            raw_desc = fetch_meta_description(article_url or url)
+            target = article_url or url
+            # Prefer real body text (avoids "1-line og padded to 3
+            # sentences"); fall back to the meta description.
+            raw_desc = fetch_article_text(target) or fetch_meta_description(target)
         if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return
