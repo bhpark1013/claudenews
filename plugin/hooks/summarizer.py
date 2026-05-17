@@ -517,6 +517,20 @@ def main():
         # (e.g. rate limit) we'd rather show no summary than the boilerplate.
         if GITHUB_REPO_URL_RE.match(url):
             raw_desc = fetch_github_summary(url)
+            if not raw_desc:
+                # GitHub's API is 60 req/hr unauthenticated and we hit it
+                # for every trending repo, so it rate-limits quickly. The
+                # backend already embeds the repo description in the title
+                # as "<owner>/<repo> — <description>" (from the search API),
+                # so fall back to that instead of showing no summary.
+                if " — " in original_title:
+                    cand = original_title.split(" — ", 1)[1].strip()
+                    if (
+                        cand
+                        and len(cand) >= 20
+                        and not is_likely_boilerplate(cand)
+                    ):
+                        raw_desc = cand
         else:
             # HN news URLs now point at the discussion thread (no
             # og:description). Summarize the linked article instead.
