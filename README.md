@@ -59,12 +59,26 @@ the next time the agent thinks, a news item rotates in.
 | Command | What it does |
 |---|---|
 | `/claudenews:setup` | Wire the status line wrapper (run once after install) |
+| `/claudenews:update` | Update to the latest version in one step |
 | `/claudenews:feed` | Expand the current news item (HN comments, repo page, etc.) |
 | `/claudenews:feed latest` | Show the 5 most recent news items |
 | `/claudenews:viewer` | Open a live news viewer in a side pane (incl. games) |
 | `/claudenews:translate ko` | Force a target language (`ko`, `ja`, `zh`, `es`, …) |
 | `/claudenews:translate off` | Disable translation |
 | `/claudenews:teardown` | Remove status line wiring (run before `/plugin remove`) |
+
+## Updating
+
+```
+/claudenews:update
+/reload-plugins
+```
+
+`/claudenews:update` pulls the latest version, refreshes the cache, and
+updates the status-line launcher in one step. `/reload-plugins` then
+activates the new hooks and commands (a Claude Code runtime action a
+plugin can't do itself). You never need to re-run `/claudenews:setup` —
+the status line auto-tracks the newest installed version.
 
 ## Sources
 
