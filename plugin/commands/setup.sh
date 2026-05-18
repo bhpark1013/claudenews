@@ -10,7 +10,10 @@
 set -e
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-SRC_HUD="$PLUGIN_ROOT/hud/claudenews-hud.mjs"
+# Install the thin launcher (not the hud body). The launcher resolves the
+# newest installed plugin version's hud at runtime, so future plugin
+# updates need no /claudenews:setup re-run.
+SRC_HUD="$PLUGIN_ROOT/hud/launcher.mjs"
 DST_HUD_DIR="$HOME/.claude/hud"
 DST_HUD="$DST_HUD_DIR/claudenews-hud.mjs"
 SETTINGS="$HOME/.claude/settings.json"
@@ -18,7 +21,7 @@ CONFIG_DIR="$HOME/.claudenews"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 
 if [ ! -f "$SRC_HUD" ]; then
-  echo "  Error: HUD wrapper not found at $SRC_HUD"
+  echo "  Error: launcher not found at $SRC_HUD"
   exit 1
 fi
 
