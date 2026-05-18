@@ -72,5 +72,21 @@ else:
 PY
 fi
 
+# Anonymous one-time install ping. Server only increments a counter — no
+# IP / user-agent / identifier is stored. Best-effort: offline just skips.
+PINGED=$(python3 -c "import json,os;p=os.path.expanduser('~/.claudenews/config.json');print((json.load(open(p)).get('pinged') if os.path.exists(p) else '') or '')" 2>/dev/null)
+if [ -z "$PINGED" ]; then
+  PING_API=$(python3 -c "import json,os;p=os.path.expanduser('~/.claudenews/config.json');print(((json.load(open(p)).get('apiUrl') if os.path.exists(p) else '') or 'https://web-olive-three-47.vercel.app'))" 2>/dev/null)
+  curl -s -m 3 "${PING_API}/api/ping" >/dev/null 2>&1 || true
+  python3 -c "
+import json, os
+p = os.path.expanduser('~/.claudenews/config.json')
+d = json.load(open(p)) if os.path.exists(p) else {}
+d['pinged'] = True
+os.makedirs(os.path.dirname(p), exist_ok=True)
+json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
+" 2>/dev/null || true
+fi
+
 echo ""
 echo "  Done. Restart Claude Code for the status line to take effect."

@@ -94,6 +94,9 @@ the status line auto-tracks the newest installed version.
   leaves your machine except to fetch the article meta description and the
   GitHub API for repo summaries
 - All caches live under `~/.claudenews/`
+- Anonymous install count: `/claudenews:setup` pings the backend **once**.
+  The server only increments a single counter — no IP, user-agent, or
+  identifier is read, stored, or logged. Offline just skips it silently.
 
 ## Uninstall
 
