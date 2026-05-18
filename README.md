@@ -65,6 +65,7 @@ the next time the agent thinks, a news item rotates in.
 | `/claudenews:viewer` | Open a live news viewer in a side pane (incl. games) |
 | `/claudenews:translate ko` | Force a target language (`ko`, `ja`, `zh`, `es`, …) |
 | `/claudenews:translate off` | Disable translation |
+| `/claudenews:list` | List news sources / toggle one on-off (`hn`, `github`, `geeknews`, …) |
 | `/claudenews:teardown` | Remove status line wiring (run before `/plugin remove`) |
 
 ## Updating
@@ -82,9 +83,16 @@ the status line auto-tracks the newest installed version.
 
 ## Sources
 
-- Hacker News top 50
-- GitHub trending repos (popular, created in the last 7 days)
-- More planned: Product Hunt, Reddit r/programming, AI newsletters
+Sources are a catalog you choose from with `/claudenews:list`:
+
+- **Hacker News** — top 50 (on by default)
+- **GitHub Trending** — popular repos created in the last 7 days (on by default)
+- **GeekNews** — Korean dev community (on by default for Korean-OS users; anyone can enable it)
+- More can be added server-side without a plugin update
+
+The plugin picks sensible defaults on first run from your OS language;
+`/claudenews:list <id>` toggles any source. Public sources are fetched
+and cached by the backend; your selection just tells it what to merge.
 
 ## Privacy
 

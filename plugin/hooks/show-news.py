@@ -23,6 +23,8 @@ CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 LOG_FILE = os.path.join(CONFIG_DIR, "hook.log")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
 SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
+SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
+SOURCES_TTL_SEC = 3600
 TRANSLATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "translator.py")
 SUMMARIZER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summarizer.py")
 
@@ -64,18 +66,88 @@ def save_timestamp():
         f.write(str(time.time()))
 
 
-def fetch_news(api_url):
+def fetch_news(api_url, sources=None):
     try:
         # Fetch a deeper pool so we can prefer items whose summary is already
         # cached (= instant render) and still have plenty of fresh items to
         # warm the cache for next time.
         url = f"{api_url}/api/news?limit=20"
+        if sources:
+            url += "&sources=" + ",".join(sources)
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             return json.loads(resp.read())
     except Exception as e:
         log(f"fetch error: {e}")
         return None
+
+
+def fetch_sources_catalog(api_url):
+    """Get the source catalog (cached locally ~1h). Falls back to a stale
+    cache, then to the always-on builtins, so news never breaks."""
+    try:
+        if os.path.exists(SOURCES_CACHE):
+            age = time.time() - os.path.getmtime(SOURCES_CACHE)
+            if age < SOURCES_TTL_SEC:
+                with open(SOURCES_CACHE) as f:
+                    return json.load(f)
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(f"{api_url}/api/sources", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            catalog = (json.loads(resp.read()) or {}).get("sources") or []
+        if catalog:
+            try:
+                with open(SOURCES_CACHE, "w") as f:
+                    json.dump(catalog, f)
+            except Exception:
+                pass
+            return catalog
+    except Exception as e:
+        log(f"sources fetch error: {e}")
+    try:
+        with open(SOURCES_CACHE) as f:
+            return json.load(f)
+    except Exception:
+        return [
+            {"id": "hn", "defaultOn": True},
+            {"id": "github", "defaultOn": True},
+        ]
+
+
+def _save_sources_selection(chosen):
+    try:
+        cfg = {}
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE) as f:
+                cfg = json.load(f) or {}
+        cfg["sources"] = chosen
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    except Exception:
+        pass
+
+
+def resolve_sources(config, catalog):
+    """Return the list of enabled source ids. User's saved selection wins;
+    on first run, compute defaults = defaultOn OR OS-language match, and
+    persist so /claudenews:list can edit it later."""
+    sel = (config or {}).get("sources")
+    if isinstance(sel, dict) and sel:
+        ids = [s["id"] for s in catalog if sel.get(s["id"], False)]
+        return ids or [s["id"] for s in catalog if s.get("defaultOn")]
+    lang = detect_lang()
+    chosen = {}
+    for s in catalog:
+        on = bool(s.get("defaultOn"))
+        if not on and lang in (s.get("defaultOnLangs") or []):
+            on = True
+        chosen[s["id"]] = on
+    _save_sources_selection(chosen)
+    return [sid for sid, on in chosen.items() if on]
 
 
 def pass_through():
@@ -247,7 +319,9 @@ def main():
 
     save_timestamp()
 
-    response = fetch_news(api_url)
+    catalog = fetch_sources_catalog(api_url)
+    selected = resolve_sources(config, catalog)
+    response = fetch_news(api_url, selected)
     items = (response or {}).get("items") or []
     api_pick = (response or {}).get("pick")
     if not api_pick and not items:

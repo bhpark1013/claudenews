@@ -1,8 +1,5 @@
 import { NextRequest } from "next/server";
-
-// Simple in-memory cache (lives for Vercel function warm duration)
-let cache: { items: NewsItem[]; fetchedAt: number } | null = null;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+import { CATALOG_BY_ID } from "@/lib/sources";
 
 export interface NewsItem {
   id: string;
@@ -15,6 +12,11 @@ export interface NewsItem {
   timestamp: number;
 }
 
+// Per-source in-memory cache (lives for the function's warm duration).
+// Keyed by source id so different ?sources= combinations share fetches.
+const cache: Record<string, { items: NewsItem[]; at: number }> = {};
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
 async function fetchHackerNews(): Promise<NewsItem[]> {
   try {
     const topRes = await fetch(
@@ -22,10 +24,8 @@ async function fetchHackerNews(): Promise<NewsItem[]> {
       { next: { revalidate: 300 } }
     );
     const ids: number[] = await topRes.json();
-    const topIds = ids.slice(0, 50);
-
     const stories = await Promise.all(
-      topIds.map(async (id) => {
+      ids.slice(0, 50).map(async (id) => {
         const r = await fetch(
           `https://hacker-news.firebaseio.com/v0/item/${id}.json`,
           { next: { revalidate: 300 } }
@@ -33,14 +33,11 @@ async function fetchHackerNews(): Promise<NewsItem[]> {
         return r.json();
       })
     );
-
     return stories
       .filter((s) => s && s.title && s.url)
       .map((s) => ({
         id: `hn-${s.id}`,
         title: s.title,
-        // Open the HN discussion thread rather than the external article —
-        // the comments are the point of Hacker News.
         url: `https://news.ycombinator.com/item?id=${s.id}`,
         source: "HackerNews",
         score: s.score,
@@ -55,11 +52,9 @@ async function fetchHackerNews(): Promise<NewsItem[]> {
 
 async function fetchGitHubTrending(): Promise<NewsItem[]> {
   try {
-    // GitHub has no official trending API; we use the search API for recently created popular repos
+    const since = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
     const res = await fetch(
-      "https://api.github.com/search/repositories?q=created:>" +
-        new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) +
-        "&sort=stars&order=desc&per_page=30",
+      `https://api.github.com/search/repositories?q=created:>${since}&sort=stars&order=desc&per_page=30`,
       {
         headers: { Accept: "application/vnd.github+json" },
         next: { revalidate: 900 },
@@ -67,70 +62,131 @@ async function fetchGitHubTrending(): Promise<NewsItem[]> {
     );
     const data = await res.json();
     if (!data.items) return [];
-
-    return data.items.map((repo: {
-      id: number;
-      full_name: string;
-      description?: string;
-      html_url: string;
-      stargazers_count: number;
-      language?: string;
-      owner: { login: string };
-      created_at: string;
-    }) => ({
-      id: `gh-${repo.id}`,
-      title: `${repo.full_name}${repo.description ? " — " + repo.description : ""}`,
-      url: repo.html_url,
-      source: "GitHub Trending",
-      score: repo.stargazers_count,
-      author: repo.owner.login,
-      timestamp: new Date(repo.created_at).getTime(),
-    }));
+    return data.items.map(
+      (repo: {
+        id: number;
+        full_name: string;
+        description?: string;
+        html_url: string;
+        stargazers_count: number;
+        owner: { login: string };
+        created_at: string;
+      }) => ({
+        id: `gh-${repo.id}`,
+        title: `${repo.full_name}${
+          repo.description ? " — " + repo.description : ""
+        }`,
+        url: repo.html_url,
+        source: "GitHub Trending",
+        score: repo.stargazers_count,
+        author: repo.owner.login,
+        timestamp: new Date(repo.created_at).getTime(),
+      })
+    );
   } catch {
     return [];
   }
 }
 
-async function getAllNews(): Promise<NewsItem[]> {
-  const now = Date.now();
-  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.items;
+function decodeEntities(s: string): string {
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
+// Minimal RSS 2.0 / Atom parser (regex, no deps). Only used for PUBLIC
+// catalog feeds (e.g. GeekNews), never user-private URLs.
+async function fetchRss(url: string, sourceName: string): Promise<NewsItem[]> {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "claudenews/1.0" },
+      next: { revalidate: 600 },
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const blocks =
+      xml.indexOf("<item") !== -1
+        ? xml.split(/<item[\s>]/).slice(1)
+        : xml.split(/<entry[\s>]/).slice(1);
+    const pick = (b: string, tag: string) => {
+      const m = b.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+      return m ? decodeEntities(m[1]) : "";
+    };
+    const out: NewsItem[] = [];
+    for (const b of blocks.slice(0, 30)) {
+      const title = pick(b, "title");
+      let link = pick(b, "link");
+      if (!link) {
+        const hm = b.match(/<link[^>]*href=["']([^"']+)["']/i); // Atom
+        link = hm ? hm[1] : "";
+      }
+      if (!title || !link) continue;
+      const ts =
+        Date.parse(pick(b, "pubDate") || pick(b, "updated") || "") || Date.now();
+      out.push({
+        id: `rss-${sourceName}-${link}`,
+        title,
+        url: link,
+        source: sourceName,
+        timestamp: ts,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
+}
 
-  const [hn, gh] = await Promise.all([fetchHackerNews(), fetchGitHubTrending()]);
-
-  // Interleave: 2 HN, 1 GH, 2 HN, 1 GH ...
-  const items: NewsItem[] = [];
-  let hnIdx = 0;
-  let ghIdx = 0;
-  while (hnIdx < hn.length || ghIdx < gh.length) {
-    if (hnIdx < hn.length) items.push(hn[hnIdx++]);
-    if (hnIdx < hn.length) items.push(hn[hnIdx++]);
-    if (ghIdx < gh.length) items.push(gh[ghIdx++]);
+async function getSource(id: string): Promise<NewsItem[]> {
+  const c = cache[id];
+  if (c && Date.now() - c.at < CACHE_TTL_MS) return c.items;
+  let items: NewsItem[] = [];
+  if (id === "hn") items = await fetchHackerNews();
+  else if (id === "github") items = await fetchGitHubTrending();
+  else {
+    const def = CATALOG_BY_ID[id];
+    if (def?.type === "rss" && def.url)
+      items = await fetchRss(def.url, def.name);
   }
-
-  cache = { items, fetchedAt: now };
+  cache[id] = { items, at: Date.now() };
   return items;
 }
 
+// Round-robin merge so no single source dominates.
+function interleave(lists: NewsItem[][]): NewsItem[] {
+  const out: NewsItem[] = [];
+  const max = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < max; i++)
+    for (const l of lists) if (i < l.length) out.push(l[i]);
+  return out;
+}
+
 export async function GET(request: NextRequest) {
-  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "10", 10);
-  const sources = request.nextUrl.searchParams.get("sources")?.split(",");
+  const limit = Math.min(
+    50,
+    Math.max(1, parseInt(request.nextUrl.searchParams.get("limit") || "10", 10) || 10)
+  );
+  const requested = (request.nextUrl.searchParams.get("sources") || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s && CATALOG_BY_ID[s]);
+  // Default to the always-on builtin sources if none specified.
+  const ids = requested.length ? requested : ["hn", "github"];
 
-  let items = await getAllNews();
-  if (sources && sources.length > 0) {
-    items = items.filter((i) =>
-      sources.some((s) => i.source.toLowerCase().includes(s.toLowerCase()))
-    );
-  }
-
-  // Pick one random item for "next" display, plus return the batch
-  const pick = items[Math.floor(Math.random() * Math.min(items.length, 15))];
+  const lists = await Promise.all(ids.map((id) => getSource(id)));
+  const items = interleave(lists);
+  const pick =
+    items[Math.floor(Math.random() * Math.min(items.length, 15))] || null;
 
   return Response.json({
     pick,
     items: items.slice(0, limit),
-    cached: !!cache,
-    fetchedAt: cache?.fetchedAt,
+    sources: ids,
   });
 }

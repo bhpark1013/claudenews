@@ -50,9 +50,11 @@ try {
 let parentOutput = "";
 let maxCols = 120; // safe default — Claude Code's statusline doesn't pass width
 let userOverrodeMaxCols = false;
+let sourcesConfigured = false;
 if (existsSync(CONFIG_FILE)) {
   try {
     const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    sourcesConfigured = cfg.sourcesConfigured === true;
     if (typeof cfg.maxStatuslineCols === "number" && cfg.maxStatuslineCols > 20) {
       maxCols = cfg.maxStatuslineCols;
       userOverrodeMaxCols = true;
@@ -250,6 +252,12 @@ function wrapCols(s, width, maxLines) {
   const kept = all.slice(0, maxLines);
   kept[maxLines - 1] = kept[maxLines - 1].replace(/.$/u, "") + "…";
   return kept;
+}
+
+// One-time discoverability nudge: shown until the user has touched
+// /claudenews:list at least once (which sets sourcesConfigured).
+if (newsLine && !sourcesConfigured) {
+  newsLine += `\n\x1b[2m  /claudenews:list to pick your news sources\x1b[0m`;
 }
 
 if (parentOutput) {
