@@ -1,5 +1,5 @@
 ---
-description: Send feedback about claudenews to the maintainer
+description: Send feedback, a bug report, or a feature request about claudenews to the maintainer. Triggers when the user wants to give claudenews feedback — e.g. "claudenews 피드백 보낼래", "claudenews에 건의/버그 제보할래", "send claudenews feedback", "report a claudenews bug". Confirm the message with the user before sending. No slash needed; just ask.
 argument-hint: "<your feedback>"
 allowed-tools: Bash(bash:*)
 ---

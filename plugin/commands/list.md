@@ -1,5 +1,5 @@
 ---
-description: Show news sources and change your selection (conversational)
+description: Show or change which news sources feed the claudenews status line. Triggers when the user wants to see/list/change/add/remove news sources or feeds — e.g. "claudenews 뉴스 소스/목록 보여줘", "뉴스 소스 바꿔/켜/꺼줘", "show/change my news sources", "manage claudenews feeds". No slash needed; just ask.
 argument-hint: "[source-id | pick]"
 allowed-tools: Bash(bash:*), Read, Edit
 ---

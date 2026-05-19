@@ -1,5 +1,5 @@
 ---
-description: Open a live news viewer next to Claude Code (tmux pane or new terminal window)
+description: Open the live claudenews viewer pane (browse all news, arrow-key nav, summaries, mini-games) in a split/terminal. Triggers when the user wants a full news view or the viewer — e.g. "claudenews 뷰어 열어줘", "뉴스 전체/패널로 보여줘", "open the news viewer", "show all the news". No slash needed; just ask.
 allowed-tools: Bash(bash:*)
 ---
 

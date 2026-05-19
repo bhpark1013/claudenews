@@ -1,5 +1,5 @@
 ---
-description: Expand the current dev news item shown in the status line
+description: Expand the news item currently shown in the claudenews status line (full summary, HN comments, repo page). Triggers when the user wants more on the current/this news — e.g. "이 뉴스 자세히/더 보여줘", "claudenews 이거 펼쳐줘", "expand this news", "what's this story about". No slash needed; just ask.
 argument-hint: "[latest | list]"
 allowed-tools: Read, Bash(python3:*), Bash(cat:*)
 ---

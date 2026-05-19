@@ -56,6 +56,12 @@ the next time the agent thinks, a news item rotates in.
 
 ## Commands
 
+You usually don't need to type these. Just **ask Claude in plain
+language** — "show my news sources", "이 뉴스 자세히 보여줘", "change
+the news language to Korean", "send claudenews feedback" — and the
+right command runs automatically. The slash commands below are the
+explicit equivalents.
+
 | Command | What it does |
 |---|---|
 | `/claudenews:setup` | Wire the status line wrapper (run once after install) |

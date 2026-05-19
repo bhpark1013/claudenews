@@ -48,12 +48,13 @@ const FEED_LABEL = _VER ? `[claude-news#${_VER}]` : "[claude-news]";
 // user has configured sources (then it'd be noise); the rest are evergreen.
 const GUIDE_ROTATE_MS = 20000;
 const GUIDES_EVERGREEN = [
-  "/claudenews:feed to expand this item",
-  "/claudenews:viewer for a live news pane + games",
-  "/claudenews:translate ko to set language",
-  "/claudenews:list to change your news sources",
+  'just ask Claude: "expand this news"',
+  'just ask Claude: "open the claudenews viewer"',
+  'just ask Claude: "change the news language"',
+  'just ask Claude: "change my news sources"',
+  'just ask Claude: "send claudenews feedback"',
 ];
-const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";
+const GUIDE_PICK_SOURCES = 'just ask Claude: "show my news sources"';
 
 let stdinData = "";
 try {
