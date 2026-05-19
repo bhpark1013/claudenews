@@ -137,6 +137,46 @@ export const CATALOG: SourceDef[] = [
     url: "https://dev.to/feed",
     defaultOn: false,
   },
+
+  // General world / national news — NOT dev-focused, so always opt-in
+  // (off by default for everyone, no language auto-enable). Users add
+  // these explicitly via /claudenews:list. (Naver News has no public
+  // general RSS — Yonhap, the national wire service, is used for KR.)
+  {
+    id: "cnn",
+    name: "🌐 CNN",
+    type: "rss",
+    url: "http://rss.cnn.com/rss/edition.rss",
+    defaultOn: false,
+  },
+  {
+    id: "bbc",
+    name: "🌐 BBC News",
+    type: "rss",
+    url: "https://feeds.bbci.co.uk/news/world/rss.xml",
+    defaultOn: false,
+  },
+  {
+    id: "nyt",
+    name: "🇺🇸 NYT World",
+    type: "rss",
+    url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+    defaultOn: false,
+  },
+  {
+    id: "yonhap",
+    name: "🇰🇷 연합뉴스",
+    type: "rss",
+    url: "https://www.yna.co.kr/rss/news.xml",
+    defaultOn: false,
+  },
+  {
+    id: "hani",
+    name: "🇰🇷 한겨레",
+    type: "rss",
+    url: "https://www.hani.co.kr/rss/",
+    defaultOn: false,
+  },
 ];
 
 export const CATALOG_BY_ID: Record<string, SourceDef> = Object.fromEntries(

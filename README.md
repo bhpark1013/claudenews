@@ -98,6 +98,9 @@ Sources are a catalog you choose from with `/claudenews:list`:
   - `heise-dev` heise Developer — German (`de`)
   - `tabnews` TabNews — Portuguese / Brazil (`pt`)
 - Global English (opt-in): `lobsters` Lobsters, `devto` DEV Community
+- General world / national news (opt-in, not dev-focused, off by default):
+  `cnn` CNN, `bbc` BBC News, `nyt` NYT World, `yonhap` 연합뉴스, `hani` 한겨레
+  (Naver News has no public general RSS; Yonhap is the KR wire-service feed)
 - More can be added server-side without a plugin update
 
 The plugin picks sensible defaults on first run from your OS language;
