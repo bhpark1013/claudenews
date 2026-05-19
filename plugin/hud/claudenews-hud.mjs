@@ -42,6 +42,19 @@ function detectVersion() {
 const _VER = detectVersion();
 const FEED_LABEL = _VER ? `[claude-news#${_VER}]` : "[claude-news]";
 
+// Rotating usage guides shown at the END of line 1. Always one is shown
+// (width permitting); it cycles every ROTATE_MS so users gradually learn
+// every command. The source-picker guide is only in the pool until the
+// user has configured sources (then it'd be noise); the rest are evergreen.
+const GUIDE_ROTATE_MS = 20000;
+const GUIDES_EVERGREEN = [
+  "/claudenews:feed to expand this item",
+  "/claudenews:viewer for a live news pane + games",
+  "/claudenews:translate ko to set language",
+  "/claudenews:list to change your news sources",
+];
+const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";
+
 let stdinData = "";
 try {
   stdinData = readFileSync(0, "utf-8");
@@ -177,11 +190,16 @@ if (existsSync(NEWS_FILE)) {
         scoreStr +
         commentsStr;
 
-      // One-time discoverability nudge appended to the END of line 1 —
-      // but only if it still fits the terminal width (drop it otherwise
-      // so the news line is never pushed to wrap).
-      if (!sourcesConfigured) {
-        const HINT = "  /claudenews:list to pick your news sources";
+      // Rotating usage guide appended to the END of line 1 — always shows
+      // one (cycling over time), but only if it still fits the terminal
+      // width (dropped otherwise so the news line is never pushed to wrap).
+      {
+        const pool = sourcesConfigured
+          ? GUIDES_EVERGREEN
+          : [GUIDE_PICK_SOURCES, ...GUIDES_EVERGREEN];
+        const guide =
+          pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];
+        const HINT = "  " + guide;
         const visible = newsLine
           .replace(/\x1b\[[0-9;]*m/g, "")
           .replace(/\x1b\]8;;[^\x07]*\x07/g, "");
