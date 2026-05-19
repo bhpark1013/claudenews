@@ -66,7 +66,7 @@ if not isinstance(sel, dict) or not sel:
         on = bool(s.get("defaultOn"))
         if not on and lang in (s.get("defaultOnLangs") or []): on = True
         sel[s["id"]] = on
-print("  News sources  (/claudenews:list <id> to toggle, no arg = picker):")
+print("  News sources  (/claudenews:list <id> to toggle · say it in chat to change · `pick` for a window):")
 for s in catalog:
     i = s["id"]
     mark = "[x]" if sel.get(i) else "[ ]"
