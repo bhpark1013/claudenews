@@ -14,20 +14,14 @@ per-language dev & news sources in the status line during agent wait time —
 auto-translated into your OS language, with short summaries that fade in as
 Claude fetches them in the background.
 
-```
-[OMC#4.13] | 5h:3% | session:5m | ctx:24%
-[claude-news] 🌐 HackerNews │ Rust 2.0 compiler is 10x faster than GCC  ▲847 💬234  /claudenews:list to pick your news sources
-       ↳ The Rust team released Rust 2.0 with a rewritten compiler frontend that…
-```
+![claudenews in the status line — English](docs/claudenews-en.png)
 
-The trailing hint rotates through the available commands and is dropped
-automatically if the terminal is too narrow. Korean / Japanese / Chinese
-users see translated titles automatically — no configuration needed:
+The title is a clickable link, `▲` score / `💬` comments show for HN
+items, and the trailing hint rotates through the commands (dropped
+automatically if the terminal is too narrow). Korean / Japanese /
+Chinese users see the **same item** auto-translated — no configuration:
 
-```
-[claude-news] 🌐 HackerNews │ Rust 2.0 컴파일러가 GCC보다 10배 빠름  ▲847 💬234
-       ↳ Rust 팀이 새 컴파일러 프론트엔드를 적용한 Rust 2.0을 출시했습니다…
-```
+![claudenews in the status line — Korean (auto-translated)](docs/claudenews-ko.png)
 
 ## Install (30 seconds)
 
