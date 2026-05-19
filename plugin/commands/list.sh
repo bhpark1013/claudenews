@@ -1,13 +1,14 @@
 #!/bin/bash
 # News-source management.
-#   list.sh             -> interactive picker in a split pane / new window
+#   list.sh             -> inline text list (default; no window)
 #   list.sh <source>    -> quick toggle that one source (no UI)
-#   list.sh text        -> plain text list (no UI), for non-TTY contexts
+#   list.sh pick        -> interactive picker in a split pane / new window
 #
-# The picker needs a real terminal, but a slash command's stdout is captured
-# by Claude Code with no controlling TTY — so (like /claudenews:viewer) we
-# launch it in a tmux/cmux/wezterm/kitty/iTerm split or a new Terminal window.
-# If none is available we fall back to the plain text list.
+# Default is the inline text list. In Claude Code a slash command has no
+# TTY, so the conversation itself is the UI: after the list is shown the
+# user can say which sources to enable/disable in natural language and
+# Claude edits ~/.claudenews/config.json directly. The windowed picker is
+# opt-in via `pick` for users who specifically want a curses toggler.
 
 set -e
 CONFIG_DIR="$HOME/.claudenews"
@@ -137,19 +138,19 @@ else:
 PY
 }
 
-# --- explicit text mode ---
-if [ "$ARG" = "text" ] || [ "$ARG" = "list" ]; then
+# --- default (no arg) or explicit text mode: inline list, no window ---
+if [ -z "$ARG" ] || [ "$ARG" = "text" ] || [ "$ARG" = "list" ]; then
   print_text_list
   exit 0
 fi
 
 # --- quick single-source toggle (non-interactive) ---
-if [ -n "$ARG" ]; then
+if [ "$ARG" != "pick" ]; then
   toggle_one "$ARG"
   exit 0
 fi
 
-# --- no arg: launch the interactive picker in a split / window ---
+# --- ARG = pick: launch the interactive picker in a split / window ---
 if [ ! -f "$PICKER" ]; then
   print_text_list
   exit 0

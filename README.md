@@ -65,7 +65,7 @@ the next time the agent thinks, a news item rotates in.
 | `/claudenews:viewer` | Open a live news viewer in a side pane (incl. games) |
 | `/claudenews:translate ko` | Force a target language (`ko`, `ja`, `zh`, `es`, …) |
 | `/claudenews:translate off` | Disable translation |
-| `/claudenews:list` | Pick news sources interactively, or toggle one by id (`hn`, `github`, `geeknews`, …) |
+| `/claudenews:list` | Show sources inline; change selection conversationally, or toggle one by id (`hn`, `github`, `cnn`, …). `list pick` for a windowed picker |
 | `/claudenews:feedback` | Send feedback / a bug report / a feature request to the maintainer |
 | `/claudenews:teardown` | Remove status line wiring (run before `/plugin remove`) |
 
