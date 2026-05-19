@@ -525,7 +525,7 @@ def release_lock_for(key):
 
 
 def write_status(url, stage):
-    """Publish a per-URL progress stage so the viewer can render it.
+    """Publish a per-URL progress stage so the status line / feed can show it.
 
     stage ∈ {fetching, translating, error, done}. 'done' clears the entry.
     """

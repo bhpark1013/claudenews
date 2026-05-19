@@ -44,17 +44,16 @@ const FEED_LABEL = _VER ? `[claude-news#${_VER}]` : "[claude-news]";
 
 // Rotating usage guides shown at the END of line 1. Always one is shown
 // (width permitting); it cycles every ROTATE_MS so users gradually learn
-// every command. The source-picker guide is only in the pool until the
+// every command. The pick-sources guide is only in the pool until the
 // user has configured sources (then it'd be noise); the rest are evergreen.
 const GUIDE_ROTATE_MS = 20000;
 const GUIDES_EVERGREEN = [
-  'just ask Claude: "expand this news"',
-  'just ask Claude: "open the claudenews viewer"',
-  'just ask Claude: "change the news language"',
-  'just ask Claude: "change my news sources"',
-  'just ask Claude: "send claudenews feedback"',
+  "/claudenews:list to see & pick news sources",
+  "/claudenews:feed to expand this item",
+  "/claudenews:translate ko to set language",
+  "/claudenews:feedback <msg> to send feedback",
 ];
-const GUIDE_PICK_SOURCES = 'just ask Claude: "show my news sources"';
+const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";
 
 let stdinData = "";
 try {

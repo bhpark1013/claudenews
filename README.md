@@ -50,17 +50,16 @@ the next time the agent thinks, a news item rotates in.
 - **GitHub repo summaries are accurate.** When a GitHub repo's description is
   empty, claudenews falls back to the README's first paragraph via the GitHub
   API instead of showing "Contribute to … by creating an account on GitHub".
-- **Built-in viewer with games.** `/claudenews:viewer` opens a live news pane
-  with arrow-key navigation, summary toggling, and 2048 / snake for the
-  really long agent waits.
+- **No separate windows.** Everything happens inline in your Claude Code
+  session — the source list is a plain menu you read and toggle by id.
 
 ## Commands
 
-You usually don't need to type these. Just **ask Claude in plain
-language** — "show my news sources", "이 뉴스 자세히 보여줘", "change
-the news language to Korean", "send claudenews feedback" — and the
-right command runs automatically. The slash commands below are the
-explicit equivalents.
+The source list is the menu: run `/claudenews:list` to see every source
+(id + flag + on/off) and toggle by id. You can also just **ask Claude in
+plain language** — "show my news sources", "이 뉴스 자세히 보여줘",
+"change the news language to Korean", "send claudenews feedback" — and
+the right command runs automatically.
 
 | Command | What it does |
 |---|---|
@@ -68,10 +67,9 @@ explicit equivalents.
 | `/claudenews:update` | Update to the latest version in one step |
 | `/claudenews:feed` | Expand the current news item (HN comments, repo page, etc.) |
 | `/claudenews:feed latest` | Show the 5 most recent news items |
-| `/claudenews:viewer` | Open a live news viewer in a side pane (incl. games) |
 | `/claudenews:translate ko` | Force a target language (`ko`, `ja`, `zh`, `es`, …) |
 | `/claudenews:translate off` | Disable translation |
-| `/claudenews:list` | Show sources inline; change selection conversationally, or toggle one by id (`hn`, `github`, `cnn`, …). `list pick` for a windowed picker |
+| `/claudenews:list` | Show every source inline; toggle one or more by id (`/claudenews:list cnn bbc hn`) |
 | `/claudenews:feedback` | Send feedback / a bug report / a feature request to the maintainer |
 | `/claudenews:teardown` | Remove status line wiring (run before `/plugin remove`) |
 
