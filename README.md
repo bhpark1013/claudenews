@@ -1,6 +1,13 @@
 # claudenews — DevFeed for Claude Code
 
-> Don't stare at the spinner. Read dev news in your status line while Claude is thinking.
+> **Switching to another task while Claude works costs you context.
+> Just staring at the terminal is boring.** claudenews fills those short
+> waits with dev news — so the idle time isn't wasted and you never lose
+> your place.
+>
+> _Claude가 다른 명령을 처리하는 동안 다른 일을 하자니 컨텍스트 스위칭
+> 비용이 들고, 터미널만 보고 있자니 심심하셨죠? 그 짧은 시간을 개발
+> 뉴스로 채우고, 흐름은 그대로 유지하세요._
 
 A Claude Code plugin that surfaces **Hacker News**, **GitHub Trending**, and
 per-language dev & news sources in the status line during agent wait time —
