@@ -85,9 +85,18 @@ the status line auto-tracks the newest installed version.
 
 Sources are a catalog you choose from with `/claudenews:list`:
 
-- **Hacker News** — top 50 (on by default)
-- **GitHub Trending** — popular repos created in the last 7 days (on by default)
-- **GeekNews** — Korean dev community (on by default for Korean-OS users; anyone can enable it)
+- **Hacker News** — top 50 (on by default, all users)
+- **GitHub Trending** — popular repos created in the last 7 days (on by default, all users)
+- Per-language native dev communities — the one matching your OS language
+  turns on automatically; all are toggleable for anyone:
+  - `geeknews` GeekNews — Korean (`ko`)
+  - `qiita` Qiita 人気 — Japanese (`ja`)  ·  `zenn`, `hatena-it` (opt-in)
+  - `v2ex` V2EX — Chinese (`zh`)  ·  `infoq-cn` (opt-in)
+  - `habr` Habr — Russian (`ru`)
+  - `jdh` Journal du hacker — French (`fr`)
+  - `heise-dev` heise Developer — German (`de`)
+  - `tabnews` TabNews — Portuguese / Brazil (`pt`)
+- Global English (opt-in): `lobsters` Lobsters, `devto` DEV Community
 - More can be added server-side without a plugin update
 
 The plugin picks sensible defaults on first run from your OS language;
