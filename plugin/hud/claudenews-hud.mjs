@@ -177,6 +177,23 @@ if (existsSync(NEWS_FILE)) {
         scoreStr +
         commentsStr;
 
+      // One-time discoverability nudge appended to the END of line 1 —
+      // but only if it still fits the terminal width (drop it otherwise
+      // so the news line is never pushed to wrap).
+      if (!sourcesConfigured) {
+        const HINT = "  /claudenews:list to pick your news sources";
+        const visible = newsLine
+          .replace(/\x1b\[[0-9;]*m/g, "")
+          .replace(/\x1b\]8;;[^\x07]*\x07/g, "");
+        let usedCols = 0;
+        for (const ch of visible) usedCols += charCols(ch.codePointAt(0));
+        let hintCols = 0;
+        for (const ch of HINT) hintCols += charCols(ch.codePointAt(0));
+        if (usedCols + hintCols <= maxCols) {
+          newsLine += `\x1b[2m${HINT}\x1b[0m`;
+        }
+      }
+
       const summary = (raw.summary || "").trim();
       if (summary) {
         // "       ↳ " prefix is 9 display cols; continuation lines indent
@@ -252,12 +269,6 @@ function wrapCols(s, width, maxLines) {
   const kept = all.slice(0, maxLines);
   kept[maxLines - 1] = kept[maxLines - 1].replace(/.$/u, "") + "…";
   return kept;
-}
-
-// One-time discoverability nudge: shown until the user has touched
-// /claudenews:list at least once (which sets sourcesConfigured).
-if (newsLine && !sourcesConfigured) {
-  newsLine += `\n\x1b[2m  /claudenews:list to pick your news sources\x1b[0m`;
 }
 
 if (parentOutput) {
