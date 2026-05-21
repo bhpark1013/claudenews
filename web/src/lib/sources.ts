@@ -12,11 +12,15 @@
 // defaultOnLangs  → additionally on when the user's OS language
 //                    (detect_lang) is in this list. Used for
 //                    language-specific sources like GeekNews (Korean).
+// lang            → primary content language (2-letter). The plugin skips
+//                    title translation when this equals the target language
+//                    (no point translating a Korean source into Korean).
 
 export interface SourceDef {
   id: string;
   name: string;
   type: "builtin" | "rss";
+  lang: string;
   url?: string;
   defaultOn: boolean;
   defaultOnLangs?: string[];
@@ -27,14 +31,15 @@ export interface SourceDef {
 // as GeekNews for Korean) — at most one extra feed on by default so a
 // non-English user isn't flooded. The rest are opt-in via /claudenews:list.
 export const CATALOG: SourceDef[] = [
-  { id: "hn", name: "🌐 Hacker News", type: "builtin", defaultOn: true },
-  { id: "github", name: "🌐 GitHub Trending", type: "builtin", defaultOn: true },
+  { id: "hn", name: "🌐 Hacker News", type: "builtin", lang: "en", defaultOn: true },
+  { id: "github", name: "🌐 GitHub Trending", type: "builtin", lang: "en", defaultOn: true },
 
   // Korean
   {
     id: "geeknews",
     name: "🇰🇷 GeekNews",
     type: "rss",
+    lang: "ko",
     url: "https://news.hada.io/rss/news",
     defaultOn: false,
     defaultOnLangs: ["ko"],
@@ -45,6 +50,7 @@ export const CATALOG: SourceDef[] = [
     id: "qiita",
     name: "🇯🇵 Qiita 人気",
     type: "rss",
+    lang: "ja",
     url: "https://qiita.com/popular-items/feed",
     defaultOn: false,
     defaultOnLangs: ["ja"],
@@ -53,6 +59,7 @@ export const CATALOG: SourceDef[] = [
     id: "zenn",
     name: "🇯🇵 Zenn",
     type: "rss",
+    lang: "ja",
     url: "https://zenn.dev/feed",
     defaultOn: false,
   },
@@ -60,6 +67,7 @@ export const CATALOG: SourceDef[] = [
     id: "hatena-it",
     name: "🇯🇵 はてブ テクノロジー",
     type: "rss",
+    lang: "ja",
     url: "https://b.hatena.ne.jp/hotentry/it.rss",
     defaultOn: false,
   },
@@ -69,6 +77,7 @@ export const CATALOG: SourceDef[] = [
     id: "v2ex",
     name: "🇨🇳 V2EX",
     type: "rss",
+    lang: "zh",
     url: "https://www.v2ex.com/index.xml",
     defaultOn: false,
     defaultOnLangs: ["zh"],
@@ -77,6 +86,7 @@ export const CATALOG: SourceDef[] = [
     id: "infoq-cn",
     name: "🇨🇳 InfoQ 中文",
     type: "rss",
+    lang: "zh",
     url: "https://www.infoq.cn/feed",
     defaultOn: false,
   },
@@ -86,6 +96,7 @@ export const CATALOG: SourceDef[] = [
     id: "habr",
     name: "🇷🇺 Habr",
     type: "rss",
+    lang: "ru",
     url: "https://habr.com/ru/rss/articles/top/?fl=ru",
     defaultOn: false,
     defaultOnLangs: ["ru"],
@@ -96,6 +107,7 @@ export const CATALOG: SourceDef[] = [
     id: "jdh",
     name: "🇫🇷 Journal du hacker",
     type: "rss",
+    lang: "fr",
     url: "https://www.journalduhacker.net/rss",
     defaultOn: false,
     defaultOnLangs: ["fr"],
@@ -106,6 +118,7 @@ export const CATALOG: SourceDef[] = [
     id: "heise-dev",
     name: "🇩🇪 heise Developer",
     type: "rss",
+    lang: "de",
     url: "https://www.heise.de/developer/feed.xml",
     defaultOn: false,
     defaultOnLangs: ["de"],
@@ -116,6 +129,7 @@ export const CATALOG: SourceDef[] = [
     id: "tabnews",
     name: "🇧🇷 TabNews",
     type: "rss",
+    lang: "pt",
     url: "https://www.tabnews.com.br/recentes/rss",
     defaultOn: false,
     defaultOnLangs: ["pt"],
@@ -127,6 +141,7 @@ export const CATALOG: SourceDef[] = [
     id: "lobsters",
     name: "🌐 Lobsters",
     type: "rss",
+    lang: "en",
     url: "https://lobste.rs/rss",
     defaultOn: false,
   },
@@ -134,6 +149,7 @@ export const CATALOG: SourceDef[] = [
     id: "devto",
     name: "🌐 DEV Community",
     type: "rss",
+    lang: "en",
     url: "https://dev.to/feed",
     defaultOn: false,
   },
@@ -146,6 +162,7 @@ export const CATALOG: SourceDef[] = [
     id: "cnn",
     name: "🌐 CNN",
     type: "rss",
+    lang: "en",
     url: "http://rss.cnn.com/rss/edition.rss",
     defaultOn: false,
   },
@@ -153,6 +170,7 @@ export const CATALOG: SourceDef[] = [
     id: "bbc",
     name: "🌐 BBC News",
     type: "rss",
+    lang: "en",
     url: "https://feeds.bbci.co.uk/news/world/rss.xml",
     defaultOn: false,
   },
@@ -160,6 +178,7 @@ export const CATALOG: SourceDef[] = [
     id: "nyt",
     name: "🇺🇸 NYT World",
     type: "rss",
+    lang: "en",
     url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     defaultOn: false,
   },
@@ -167,6 +186,7 @@ export const CATALOG: SourceDef[] = [
     id: "yonhap",
     name: "🇰🇷 연합뉴스",
     type: "rss",
+    lang: "ko",
     url: "https://www.yna.co.kr/rss/news.xml",
     defaultOn: false,
   },
@@ -174,6 +194,7 @@ export const CATALOG: SourceDef[] = [
     id: "hani",
     name: "🇰🇷 한겨레",
     type: "rss",
+    lang: "ko",
     url: "https://www.hani.co.kr/rss/",
     defaultOn: false,
   },

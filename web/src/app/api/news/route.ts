@@ -6,6 +6,7 @@ export interface NewsItem {
   title: string;
   url: string;
   source: string;
+  lang?: string;
   score?: number;
   comments?: number;
   author?: string;
@@ -154,6 +155,10 @@ async function getSource(id: string): Promise<NewsItem[]> {
     if (def?.type === "rss" && def.url)
       items = await fetchRss(def.url, def.name);
   }
+  // Tag each item with its source's content language so the plugin can skip
+  // translating a source that's already in the user's target language.
+  const lang = CATALOG_BY_ID[id]?.lang ?? "en";
+  items = items.map((it) => ({ ...it, lang }));
   cache[id] = { items, at: Date.now() };
   return items;
 }

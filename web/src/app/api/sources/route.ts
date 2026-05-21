@@ -9,6 +9,7 @@ export async function GET() {
         id: s.id,
         name: s.name,
         type: s.type,
+        lang: s.lang,
         defaultOn: s.defaultOn,
         defaultOnLangs: s.defaultOnLangs ?? [],
       })),

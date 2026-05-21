@@ -285,19 +285,12 @@ def main():
 
     log("news hook invoked")
 
-    # Read stdin and check if user is invoking a slash command or meta action
-    # If so, skip news rotation to avoid changing state they're inspecting
-    stdin_data = {}
+    # Drain the hook payload. Nothing in it is needed: rotation now runs on
+    # Stop / SessionStart (not per-prompt), so there's no prompt to inspect.
     try:
-        stdin_data = json.load(sys.stdin)
+        json.load(sys.stdin)
     except Exception:
         pass
-
-    prompt = (stdin_data.get("prompt") or "").strip()
-    if prompt.startswith("/feed") or prompt.startswith("/news"):
-        log("skipping: user invoked feed command")
-        pass_through()
-        return
 
     config = load_config()
     # Config is optional for news (no auth required)
@@ -366,8 +359,16 @@ def main():
     log(f"showing news: {original_title[:50]}")
     url = pick.get("url", "")
 
+    # Skip title translation when the source is already in the target language
+    # (e.g. GeekNews/Yonhap titles when target is ko) — no point spending a
+    # Claude call to "translate" Korean into Korean. Summaries are unaffected:
+    # summary_lang stays the target so a Korean article still gets a Korean
+    # summary (that's generation, not translation).
+    pick_lang = pick.get("lang")
+    title_needs_translation = translate_enabled and pick_lang != target_lang
+
     display_title = original_title
-    if translate_enabled:
+    if title_needs_translation:
         cached = cached_translation(original_title, target_lang)
         if cached:
             display_title = cached
@@ -394,8 +395,8 @@ def main():
 
     atomic_write_json(CURRENT_NEWS_FILE, record)
 
-    # Launch background translation if enabled and not yet cached
-    if translate_enabled and display_title == original_title:
+    # Launch background translation if needed and not yet cached
+    if title_needs_translation and display_title == original_title:
         launch_translator(original_title, target_lang)
         log(f"launched translator for {target_lang}")
 
