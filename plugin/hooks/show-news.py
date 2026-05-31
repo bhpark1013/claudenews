@@ -24,7 +24,9 @@ LOG_FILE = os.path.join(CONFIG_DIR, "hook.log")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
 SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
+RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
 SOURCES_TTL_SEC = 3600
+RECENT_MAX = 10  # Don't re-show a URL until this many other picks have passed
 TRANSLATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "translator.py")
 SUMMARIZER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summarizer.py")
 
@@ -66,12 +68,33 @@ def save_timestamp():
         f.write(str(time.time()))
 
 
+def load_recent():
+    """URLs of the most recently shown items (newest first)."""
+    try:
+        with open(RECENT_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def remember_recent(url):
+    """Push url onto the recent ring buffer (dedup, capped at RECENT_MAX)."""
+    if not url:
+        return
+    try:
+        prior = [u for u in load_recent() if u != url]
+        atomic_write_json(RECENT_FILE, [url] + prior[: RECENT_MAX - 1])
+    except Exception:
+        pass
+
+
 def fetch_news(api_url, sources=None):
     try:
         # Fetch a deeper pool so we can prefer items whose summary is already
         # cached (= instant render) and still have plenty of fresh items to
         # warm the cache for next time.
-        url = f"{api_url}/api/news?limit=20"
+        url = f"{api_url}/api/news?limit=40"
         if sources:
             url += "&sources=" + ",".join(sources)
         req = urllib.request.Request(url, method="GET")
@@ -339,17 +362,39 @@ def main():
         except Exception:
             prev_url = ""
 
+    # Avoid re-showing anything from the last RECENT_MAX picks (not just the
+    # immediately previous one) so a small pool can't ping-pong between a
+    # couple of items.
+    recent = set(load_recent())
+    recent.add(prev_url)
+
+    def _not_recent(lst):
+        return [it for it in lst if it.get("url") not in recent]
+
     cached_candidates = [
         it for it in items
         if isinstance(it, dict) and it.get("url") and cached_summary(it["url"], summary_lang)
     ]
-    rotatable = [it for it in cached_candidates if it.get("url") != prev_url] or cached_candidates
+    # Prefer cached-summary items not shown recently; degrade gracefully so we
+    # still end up with something when everything's been seen.
+    rotatable = (
+        _not_recent(cached_candidates)
+        or [it for it in cached_candidates if it.get("url") != prev_url]
+        or cached_candidates
+    )
     pick = None
     if rotatable:
         pick = random.choice(rotatable)
         log(f"picked cached-summary item: {pick.get('title','')[:50]}")
     if not pick:
-        pick = api_pick or (items[0] if items else None)
+        # No cached summary yet: prefer a fresh (not-recent) item, else fall
+        # back to the server's pick / first item.
+        fresh = _not_recent(
+            [it for it in items if isinstance(it, dict) and it.get("url")]
+        )
+        pick = (random.choice(fresh) if fresh else None) or api_pick or (
+            items[0] if items else None
+        )
     if not pick:
         log("no news received")
         pass_through()
@@ -358,6 +403,7 @@ def main():
     original_title = pick.get("title", "")
     log(f"showing news: {original_title[:50]}")
     url = pick.get("url", "")
+    remember_recent(url)
 
     # Skip title translation when the source is already in the target language
     # (e.g. GeekNews/Yonhap titles when target is ko) — no point spending a
@@ -407,7 +453,7 @@ def main():
 
     # Pre-warm cache: launch summarizers for up to PREWARM_MAX uncached
     # candidates so the next prompt is more likely to hit a cached pick.
-    # Capped to avoid spawning a Claude subprocess per item when limit=20.
+    # Capped to avoid spawning a Claude subprocess per item when limit=40.
     PREWARM_MAX = 5
     prewarmed = 0
     for item in items:

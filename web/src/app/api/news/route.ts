@@ -186,8 +186,10 @@ export async function GET(request: NextRequest) {
 
   const lists = await Promise.all(ids.map((id) => getSource(id)));
   const items = interleave(lists);
+  // Pick from a wider window (top 30) so the rotation pool is large enough
+  // that consecutive fetches don't keep landing on the same handful of items.
   const pick =
-    items[Math.floor(Math.random() * Math.min(items.length, 15))] || null;
+    items[Math.floor(Math.random() * Math.min(items.length, 30))] || null;
 
   return Response.json({
     pick,
