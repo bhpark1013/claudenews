@@ -72,18 +72,33 @@ else:
 PY
 fi
 
-# Anonymous one-time install ping. Server only increments a counter — no
-# IP / user-agent / identifier is stored. Best-effort: offline just skips.
-PINGED=$(python3 -c "import json,os;p=os.path.expanduser('~/.claudenews/config.json');print((json.load(open(p)).get('pinged') if os.path.exists(p) else '') or '')" 2>/dev/null)
-if [ -z "$PINGED" ]; then
-  PING_API=$(python3 -c "import json,os;p=os.path.expanduser('~/.claudenews/config.json');print(((json.load(open(p)).get('apiUrl') if os.path.exists(p) else '') or 'https://web-olive-three-47.vercel.app'))" 2>/dev/null)
-  curl -s -m 3 "${PING_API}/api/ping" >/dev/null 2>&1 || true
+# Anonymous install ping. We generate a random install id (a UUID — NOT an
+# IP, user-agent, or anything tied to identity) and store it locally. It
+# only lets the server de-duplicate reinstalls and detect uninstalls; the
+# server stores nothing else. Best-effort: offline just skips. The id is
+# persisted even when offline so the matching uninstall ping can find it.
+INSTALL_INFO=$(python3 -c "
+import json, os, uuid
+p = os.path.expanduser('~/.claudenews/config.json')
+d = json.load(open(p)) if os.path.exists(p) else {}
+if not d.get('installId'):
+    d['installId'] = str(uuid.uuid4())
+api = d.get('apiUrl') or 'https://web-olive-three-47.vercel.app'
+pinged = '1' if d.get('pinged') else ''
+os.makedirs(os.path.dirname(p), exist_ok=True)
+json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
+print(d['installId']); print(api); print(pinged)
+" 2>/dev/null)
+INSTALL_ID=$(printf '%s\n' "$INSTALL_INFO" | sed -n '1p')
+PING_API=$(printf '%s\n' "$INSTALL_INFO" | sed -n '2p')
+PINGED=$(printf '%s\n' "$INSTALL_INFO" | sed -n '3p')
+if [ -z "$PINGED" ] && [ -n "$INSTALL_ID" ]; then
+  curl -s -m 3 "${PING_API}/api/ping?id=${INSTALL_ID}" >/dev/null 2>&1 || true
   python3 -c "
 import json, os
 p = os.path.expanduser('~/.claudenews/config.json')
 d = json.load(open(p)) if os.path.exists(p) else {}
 d['pinged'] = True
-os.makedirs(os.path.dirname(p), exist_ok=True)
 json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
 " 2>/dev/null || true
 fi

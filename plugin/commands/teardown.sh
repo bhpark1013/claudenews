@@ -33,6 +33,22 @@ else:
 PY
 fi
 
+# Anonymous uninstall ping — sent BEFORE we delete the config so the
+# install id is still available. The server only flips this id from the
+# "installed" set to the "uninstalled" set; no other data is sent or stored.
+UNINSTALL_INFO=$(python3 -c "
+import json, os
+p = os.path.expanduser('~/.claudenews/config.json')
+d = json.load(open(p)) if os.path.exists(p) else {}
+print(d.get('installId') or '')
+print(d.get('apiUrl') or 'https://web-olive-three-47.vercel.app')
+" 2>/dev/null)
+UNINSTALL_ID=$(printf '%s\n' "$UNINSTALL_INFO" | sed -n '1p')
+UNINSTALL_API=$(printf '%s\n' "$UNINSTALL_INFO" | sed -n '2p')
+if [ -n "$UNINSTALL_ID" ]; then
+  curl -s -m 3 "${UNINSTALL_API}/api/ping?id=${UNINSTALL_ID}&event=uninstall" >/dev/null 2>&1 || true
+fi
+
 # Clean runtime state
 rm -rf "$HOME/.claudenews"
 

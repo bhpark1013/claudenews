@@ -8,10 +8,13 @@ const KV_URL =
   process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN =
   process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
 const MAX_LEN = 1000;
 
-async function kv(cmd: string[]): Promise<string | number | null> {
+async function kv<T = string | number | null>(
+  cmd: string[]
+): Promise<T | null> {
   if (!KV_URL || !KV_TOKEN) return null;
   try {
     const res = await fetch(
@@ -23,14 +26,35 @@ async function kv(cmd: string[]): Promise<string | number | null> {
     );
     if (!res.ok) return null;
     const json = await res.json();
-    return json.result ?? null;
+    return (json.result ?? null) as T | null;
   } catch {
     return null;
   }
 }
 
 export async function GET(request: NextRequest) {
-  if (request.nextUrl.searchParams.get("stats") === "1") {
+  const params = request.nextUrl.searchParams;
+
+  // Admin-only read of the actual messages. Guarded by a shared secret so
+  // the raw feedback list is never publicly exposed. Compared with a
+  // length-aware check; missing/empty ADMIN_TOKEN means the door stays shut.
+  const admin = params.get("admin");
+  if (admin !== null) {
+    if (!ADMIN_TOKEN || admin !== ADMIN_TOKEN) {
+      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+    const raw = (await kv<string[]>(["LRANGE", "feedback:list", "0", "-1"])) || [];
+    const items = raw.map((e) => {
+      try {
+        return JSON.parse(e) as { t: string; v: string | null; m: string };
+      } catch {
+        return { t: null, v: null, m: e };
+      }
+    });
+    return Response.json({ ok: true, count: items.length, items });
+  }
+
+  if (params.get("stats") === "1") {
     const total = await kv(["GET", "feedback:count"]);
     return Response.json({ feedback: Number(total) || 0 });
   }
