@@ -68,6 +68,46 @@ def save_timestamp():
         f.write(str(time.time()))
 
 
+def maybe_heartbeat(config, api_url):
+    """Tell the server this install is still active, at most once per UTC day.
+
+    Fire-and-forget in a detached process so the status line never blocks on
+    the network. We persist a random installId (generating one if this client
+    predates id-aware versions) and the last heartbeat date. The server only
+    records the anonymous id in day/week/month activity sets — nothing else.
+    """
+    try:
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        cfg = config if isinstance(config, dict) else {}
+        if cfg.get("lastHeartbeat") == today:
+            return
+        # Read-modify-write from disk so we never clobber other settings.
+        try:
+            with open(CONFIG_FILE) as f:
+                disk = json.load(f)
+        except Exception:
+            disk = {}
+        if not isinstance(disk, dict):
+            disk = {}
+        install_id = disk.get("installId") or cfg.get("installId")
+        if not install_id:
+            import uuid
+            install_id = str(uuid.uuid4())
+        disk["installId"] = install_id
+        disk["lastHeartbeat"] = today
+        atomic_write_json(CONFIG_FILE, disk)
+        url = f"{api_url}/api/ping?id={install_id}&event=heartbeat"
+        subprocess.Popen(
+            ["curl", "-s", "-m", "3", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        log(f"heartbeat failed: {e}")
+
+
 def load_recent():
     """URLs of the most recently shown items (newest first)."""
     try:
@@ -322,6 +362,11 @@ def main():
     if config:
         enabled = config.get("newsEnabled", True)
         api_url = config.get("apiUrl", DEFAULT_API)
+
+    # Daily active-user heartbeat. Runs before the news enabled/rate-limit
+    # gates so a still-installed client counts as active even with news off;
+    # it self-throttles to once per UTC day and never blocks (detached).
+    maybe_heartbeat(config, api_url)
 
     if not enabled:
         log("news disabled")
