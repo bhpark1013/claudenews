@@ -56,7 +56,6 @@ const GUIDE_ROTATE_MS = 20000;
 const GUIDES_EVERGREEN = [
   "/claudenews:list to see & pick news sources",
   "/claudenews:translate ko to set language",
-  "/claudenews:open to open this item in your browser",
   "/claudenews:feedback <msg> to send feedback",
 ];
 const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";

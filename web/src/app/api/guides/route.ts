@@ -16,7 +16,6 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const DEFAULTS: string[] = [
   "/claudenews:list to see & pick news sources",
   "/claudenews:translate ko to set language",
-  "/claudenews:open to open this item in your browser",
   "/claudenews:feedback <msg> to send feedback",
 ];
 
