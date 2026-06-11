@@ -138,10 +138,59 @@ def list_latest():
     print()
 
 
+def _open_in_browser(url):
+    """Launch the OS default browser. Returns False when no GUI is reachable
+    (headless box, plain SSH session) so the caller can fall back to printing."""
+    import shutil
+    import subprocess
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", url], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        if sys.platform.startswith("win"):
+            os.startfile(url)  # type: ignore[attr-defined]  # Windows-only
+            return True
+        # Linux/BSD: needs a display server + xdg-open
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return False
+        opener = shutil.which("xdg-open")
+        if not opener:
+            return False
+        subprocess.run([opener, url], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def open_current():
+    """Open the currently shown news item in the default web browser."""
+    if not os.path.exists(CURRENT_NEWS_FILE):
+        print("No current news item. Send a prompt to Claude Code to trigger one.")
+        return
+    with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
+        news = json.load(f)
+    url = (news.get("url") or "").strip()
+    title = news.get("title", "")
+    # Only open real web links — never file://, custom schemes, or shell input.
+    if not (url.startswith("http://") or url.startswith("https://")):
+        print("열 수 있는 웹 링크가 없습니다." if not url
+              else f"안전하지 않은 링크라 열지 않았습니다: {url}")
+        return
+    if _open_in_browser(url):
+        print(f"🌐 브라우저에서 열었습니다: {title}\n{url}")
+    else:
+        print("이 환경에서는 브라우저를 열 수 없습니다 (원격/headless 터미널). "
+              f"아래 링크를 직접 여세요:\n{url}")
+
+
 def main():
     args = sys.argv[1:]
     if not args:
         expand_current()
+    elif args[0] in ("open", "browser"):
+        open_current()
     elif args[0] in ("latest", "list"):
         list_latest()
     else:
