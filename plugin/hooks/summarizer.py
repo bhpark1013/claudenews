@@ -142,7 +142,7 @@ def load_cache():
     if not os.path.exists(CACHE_FILE):
         return {}
     try:
-        with open(CACHE_FILE) as f:
+        with open(CACHE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -153,7 +153,7 @@ def save_cache(cache):
         items = sorted(cache.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)
         cache = dict(items[:MAX_CACHE])
     try:
-        with open(CACHE_FILE, "w") as f:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=False)
     except Exception:
         pass
@@ -476,7 +476,7 @@ def update_current_news(original_title, summary):
     if not os.path.exists(CURRENT_NEWS_FILE):
         return
     try:
-        with open(CURRENT_NEWS_FILE) as f:
+        with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return
@@ -495,7 +495,7 @@ def acquire_lock_for(key):
         locks = {}
         if os.path.exists(LOCK_FILE):
             try:
-                with open(LOCK_FILE) as f:
+                with open(LOCK_FILE, encoding="utf-8") as f:
                     locks = json.load(f)
             except Exception:
                 locks = {}
@@ -504,7 +504,7 @@ def acquire_lock_for(key):
         if key in locks:
             return False
         locks[key] = now
-        with open(LOCK_FILE, "w") as f:
+        with open(LOCK_FILE, "w", encoding="utf-8") as f:
             json.dump(locks, f)
         return True
     except Exception:
@@ -515,10 +515,10 @@ def release_lock_for(key):
     try:
         if not os.path.exists(LOCK_FILE):
             return
-        with open(LOCK_FILE) as f:
+        with open(LOCK_FILE, encoding="utf-8") as f:
             locks = json.load(f)
         locks.pop(key, None)
-        with open(LOCK_FILE, "w") as f:
+        with open(LOCK_FILE, "w", encoding="utf-8") as f:
             json.dump(locks, f)
     except Exception:
         pass
@@ -535,7 +535,7 @@ def write_status(url, stage):
         statuses = {}
         if os.path.exists(STATUS_FILE):
             try:
-                with open(STATUS_FILE) as f:
+                with open(STATUS_FILE, encoding="utf-8") as f:
                     statuses = json.load(f)
             except Exception:
                 statuses = {}
@@ -549,7 +549,7 @@ def write_status(url, stage):
             statuses.pop(url, None)
         else:
             statuses[url] = {"stage": stage, "ts": now}
-        with open(STATUS_FILE, "w") as f:
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
             json.dump(statuses, f)
     except Exception:
         pass

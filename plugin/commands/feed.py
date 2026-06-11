@@ -6,6 +6,14 @@ import os
 import sys
 import urllib.request
 
+# Windows consoles default to a legacy code page (e.g. cp949); force UTF-8 so
+# Korean/CJK news text prints without UnicodeEncodeError.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 CONFIG_DIR = os.path.expanduser("~/.claudenews")
 CURRENT_NEWS_FILE = os.path.join(CONFIG_DIR, ".current-news")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -14,7 +22,7 @@ DEFAULT_API = "https://web-olive-three-47.vercel.app"
 
 def load_api_url():
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             return json.load(f).get("apiUrl", DEFAULT_API)
     except Exception:
         return DEFAULT_API
@@ -58,7 +66,7 @@ def expand_current():
         print("No current news item. Send a prompt to Claude Code to trigger one.")
         return
 
-    with open(CURRENT_NEWS_FILE) as f:
+    with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
         news = json.load(f)
 
     title = news.get("title", "")

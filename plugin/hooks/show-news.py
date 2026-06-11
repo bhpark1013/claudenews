@@ -36,7 +36,7 @@ RATE_LIMIT_SEC = 30  # Reuse the current news item for 30s instead of re-fetchin
 
 def log(msg):
     try:
-        with open(LOG_FILE, "a") as f:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
     except Exception:
         pass
@@ -46,7 +46,7 @@ def load_config():
     if not os.path.exists(CONFIG_FILE):
         return None
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -56,7 +56,7 @@ def is_rate_limited():
     if not os.path.exists(LAST_OPEN_FILE):
         return False
     try:
-        with open(LAST_OPEN_FILE) as f:
+        with open(LAST_OPEN_FILE, encoding="utf-8") as f:
             last = float(f.read().strip())
         return (time.time() - last) < RATE_LIMIT_SEC
     except Exception:
@@ -64,7 +64,7 @@ def is_rate_limited():
 
 
 def save_timestamp():
-    with open(LAST_OPEN_FILE, "w") as f:
+    with open(LAST_OPEN_FILE, "w", encoding="utf-8") as f:
         f.write(str(time.time()))
 
 
@@ -83,7 +83,7 @@ def maybe_heartbeat(config, api_url):
             return
         # Read-modify-write from disk so we never clobber other settings.
         try:
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 disk = json.load(f)
         except Exception:
             disk = {}
@@ -111,7 +111,7 @@ def maybe_heartbeat(config, api_url):
 def load_recent():
     """URLs of the most recently shown items (newest first)."""
     try:
-        with open(RECENT_FILE) as f:
+        with open(RECENT_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -152,7 +152,7 @@ def fetch_sources_catalog(api_url):
         if os.path.exists(SOURCES_CACHE):
             age = time.time() - os.path.getmtime(SOURCES_CACHE)
             if age < SOURCES_TTL_SEC:
-                with open(SOURCES_CACHE) as f:
+                with open(SOURCES_CACHE, encoding="utf-8") as f:
                     return json.load(f)
     except Exception:
         pass
@@ -162,7 +162,7 @@ def fetch_sources_catalog(api_url):
             catalog = (json.loads(resp.read()) or {}).get("sources") or []
         if catalog:
             try:
-                with open(SOURCES_CACHE, "w") as f:
+                with open(SOURCES_CACHE, "w", encoding="utf-8") as f:
                     json.dump(catalog, f)
             except Exception:
                 pass
@@ -170,7 +170,7 @@ def fetch_sources_catalog(api_url):
     except Exception as e:
         log(f"sources fetch error: {e}")
     try:
-        with open(SOURCES_CACHE) as f:
+        with open(SOURCES_CACHE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return [
@@ -183,11 +183,11 @@ def _save_sources_selection(chosen):
     try:
         cfg = {}
         if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 cfg = json.load(f) or {}
         cfg["sources"] = chosen
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w") as f:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
             f.write("\n")
     except Exception:
@@ -228,7 +228,7 @@ def detect_lang():
         try:
             out = subprocess.run(
                 ["defaults", "read", "-g", "AppleLocale"],
-                capture_output=True, text=True, timeout=2,
+                capture_output=True, text=True, encoding="utf-8", timeout=2,
             )
             if out.returncode == 0:
                 code = out.stdout.strip().split("_")[0].split("-")[0].lower()
@@ -271,7 +271,7 @@ def cached_translation(title, target_lang):
     if not os.path.exists(TRANSLATION_CACHE):
         return None
     try:
-        with open(TRANSLATION_CACHE) as f:
+        with open(TRANSLATION_CACHE, encoding="utf-8") as f:
             cache = json.load(f)
         return cache.get(f"{target_lang}::{title}", {}).get("translation")
     except Exception:
@@ -317,7 +317,7 @@ def cached_summary(url, target_lang):
     if not os.path.exists(SUMMARY_CACHE):
         return None
     try:
-        with open(SUMMARY_CACHE) as f:
+        with open(SUMMARY_CACHE, encoding="utf-8") as f:
             cache = json.load(f)
         summary = cache.get(f"{target_lang}::{url}", {}).get("summary")
         if summary and _is_github_boilerplate(summary):
@@ -402,7 +402,7 @@ def main():
     prev_url = ""
     if os.path.exists(CURRENT_NEWS_FILE):
         try:
-            with open(CURRENT_NEWS_FILE) as f:
+            with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
                 prev_url = (json.load(f) or {}).get("url", "") or ""
         except Exception:
             prev_url = ""

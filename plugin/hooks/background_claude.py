@@ -39,7 +39,7 @@ def load_json_file(path: str) -> dict[str, Any]:
     if not os.path.exists(path):
         return {}
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data
@@ -89,6 +89,11 @@ def build_plugin_disable_overrides(
 def build_background_env() -> dict[str, str]:
     env = os.environ.copy()
     env[BACKGROUND_CHILD_ENV] = "1"
+    # Force UTF-8 in child Python processes (translator/summarizer) and signal
+    # UTF-8 to Claude. Windows defaults to a legacy code page (e.g. cp949),
+    # which corrupts non-ASCII news titles/translations in file I/O and pipes.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -133,6 +138,8 @@ def run_background_prompt(
         build_claude_command(prompt, task_name=task_name, config=config),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         cwd=CONFIG_DIR,
         env=build_background_env(),
@@ -157,7 +164,7 @@ def atomic_write_json(path: str, data: Any) -> None:
     HUD reads it on every render. Truncate-then-write would briefly expose
     an empty file."""
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
     os.replace(tmp, path)
 
@@ -182,7 +189,7 @@ def summarize_process_error(result: subprocess.CompletedProcess[str]) -> str:
 def log_background_event(message: str) -> None:
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(HOOK_LOG_FILE, "a") as f:
+        with open(HOOK_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"[{task_name_timestamp()}] {message}\n")
     except Exception:
         pass
