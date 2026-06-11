@@ -36,6 +36,19 @@ DEFAULT_API = "https://web-olive-three-47.vercel.app"
 RATE_LIMIT_SEC = 30  # Reuse the current news item for 30s instead of re-fetching on every prompt
 
 
+def _plugin_version():
+    """This plugin's version, read from .../<ver>/plugin/.claude-plugin/plugin.json."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return str((json.load(f) or {}).get("version", "")).strip()
+    except Exception:
+        return ""
+
+
+PLUGIN_VERSION = _plugin_version()
+
+
 def log(msg):
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -99,6 +112,9 @@ def maybe_heartbeat(config, api_url):
         disk["lastHeartbeat"] = today
         atomic_write_json(CONFIG_FILE, disk)
         url = f"{api_url}/api/ping?id={install_id}&event=heartbeat"
+        if PLUGIN_VERSION:
+            from urllib.parse import quote
+            url += "&v=" + quote(PLUGIN_VERSION)
         subprocess.Popen(
             ["curl", "-s", "-m", "3", url],
             stdout=subprocess.DEVNULL,

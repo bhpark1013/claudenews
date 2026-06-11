@@ -14,6 +14,9 @@ const KV_TOKEN =
 // Random opaque token, must be 8–64 of [A-Za-z0-9-]. Anything else is
 // ignored and treated as a legacy (id-less) ping.
 const ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+// Plugin version string ("0.20.0", optional "-suffix"). Anything else is
+// ignored so a junk value can never become a KV hash field.
+const VER_RE = /^\d{1,4}(\.\d{1,4}){1,3}(-[A-Za-z0-9.]{1,20})?$/;
 // Per-day bucket keys: "<prefix>:YYYY-MM-DD".
 const dayKeyRe = (prefix: string) =>
   new RegExp(`^${prefix}:\\d{4}-\\d{2}-\\d{2}$`);
@@ -135,6 +138,41 @@ async function dailyActive(): Promise<Record<string, number>> {
   return out;
 }
 
+// Per-day version distribution of active users: HGETALL each
+// "ver:day:YYYY-MM-DD" hash → { day: { version: count } }.
+async function dailyVersions(): Promise<Record<string, Record<string, number>>> {
+  const re = dayKeyRe("ver:day");
+  const keys: string[] = [];
+  let cursor = "0";
+  do {
+    const page = await kv<[string, string[]]>([
+      "SCAN",
+      cursor,
+      "MATCH",
+      "ver:day:*",
+      "COUNT",
+      "1000",
+    ]);
+    if (!page) break;
+    cursor = page[0];
+    for (const k of page[1] || []) if (re.test(k)) keys.push(k);
+  } while (cursor !== "0");
+
+  keys.sort();
+  const out: Record<string, Record<string, number>> = {};
+  for (const k of keys) {
+    const flat = await kv<string[]>(["HGETALL", k]); // [field, val, field, val…]
+    const dist: Record<string, number> = {};
+    if (Array.isArray(flat)) {
+      for (let i = 0; i + 1 < flat.length; i += 2) {
+        dist[flat[i]] = Number(flat[i + 1]) || 0;
+      }
+    }
+    out[k.slice("ver:day:".length)] = dist;
+  }
+  return out;
+}
+
 async function stats(includeDaily: boolean) {
   const { day, week, month } = listScanKeys();
   const [
@@ -167,16 +205,19 @@ async function stats(includeDaily: boolean) {
     mau: Number(mau) || 0,
   };
   if (!includeDaily) return base;
-  const [daily, dailyUninstalls, activeDaily] = await Promise.all([
+  const [daily, dailyUninstalls, activeDaily, versionsDaily] = await Promise.all([
     dailyBuckets("installs"),
     dailyBuckets("uninstalls"),
     dailyActive(),
+    dailyVersions(),
   ]);
   return {
     ...base,
     daily,
     daily_uninstalls: dailyUninstalls,
     daily_active: activeDaily,
+    versions: versionsDaily[day] || {}, // today's active users by version
+    versions_daily: versionsDaily, // per-day version distribution history
   };
 }
 
@@ -211,12 +252,20 @@ export async function GET(request: NextRequest) {
     if (id) {
       await markInstalled(id); // self-heal install set for pre-id clients
       const { week, month } = listScanKeys();
-      await kv(["SADD", `active:day:${day}`, id]);
+      const newToday = await kv(["SADD", `active:day:${day}`, id]); // 1 if first today
       await kv(["EXPIRE", `active:day:${day}`, TTL_DAY]);
       await kv(["SADD", `active:week:${week}`, id]);
       await kv(["EXPIRE", `active:week:${week}`, TTL_WEEK]);
       await kv(["SADD", `active:month:${month}`, id]);
       await kv(["EXPIRE", `active:month:${month}`, TTL_MONTH]);
+      // Version distribution of active users: count each id once per day on
+      // the version it reported, so "ver:day:<day>" == that day's DAU split by
+      // plugin version. Clients too old to send `v` simply go uncounted.
+      const v = (params.get("v") || "").trim();
+      if (newToday === 1 && VER_RE.test(v)) {
+        await kv(["HINCRBY", `ver:day:${day}`, v, "1"]);
+        await kv(["EXPIRE", `ver:day:${day}`, TTL_MONTH]);
+      }
     }
     return Response.json({ ok: true, event: "heartbeat" });
   }
