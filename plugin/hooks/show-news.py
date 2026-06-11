@@ -24,8 +24,10 @@ LOG_FILE = os.path.join(CONFIG_DIR, "hook.log")
 TRANSLATION_CACHE = os.path.join(CONFIG_DIR, ".translation-cache.json")
 SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
+GUIDES_CACHE = os.path.join(CONFIG_DIR, ".guides-cache.json")
 RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
 SOURCES_TTL_SEC = 3600
+GUIDES_TTL_SEC = 3600
 RECENT_MAX = 10  # Don't re-show a URL until this many other picks have passed
 TRANSLATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "translator.py")
 SUMMARIZER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summarizer.py")
@@ -143,6 +145,31 @@ def fetch_news(api_url, sources=None):
     except Exception as e:
         log(f"fetch error: {e}")
         return None
+
+
+def refresh_guides_cache(api_url):
+    """Refresh the server-driven status-line guides (~1h TTL). Best-effort and
+    TTL-gated; the HUD falls back to its built-in guides when the cache is
+    absent or stale, so this never blocks or breaks the status line."""
+    try:
+        if os.path.exists(GUIDES_CACHE):
+            age = time.time() - os.path.getmtime(GUIDES_CACHE)
+            if age < GUIDES_TTL_SEC:
+                return
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(f"{api_url}/api/guides", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            guides = (json.loads(resp.read()) or {}).get("guides")
+        if isinstance(guides, list) and guides:
+            with open(GUIDES_CACHE, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"guides": guides, "timestamp": int(time.time() * 1000)},
+                    f, ensure_ascii=False,
+                )
+    except Exception as e:
+        log(f"guides fetch error: {e}")
 
 
 def fetch_sources_catalog(api_url):
@@ -367,6 +394,7 @@ def main():
     # gates so a still-installed client counts as active even with news off;
     # it self-throttles to once per UTC day and never blocks (detached).
     maybe_heartbeat(config, api_url)
+    refresh_guides_cache(api_url)
 
     if not enabled:
         log("news disabled")

@@ -20,6 +20,10 @@ const HOME = homedir();
 const CONFIG_FILE = join(HOME, ".claudenews/config.json");
 const NEWS_FILE = join(HOME, ".claudenews/.current-news");
 const NEWS_TTL_SEC = 3600;
+// Server-driven usage guides, refreshed into this cache by show-news.py.
+// Lets the maintainer change the rotating hints without a client update;
+// the HUD falls back to the built-in list below when the cache is absent.
+const GUIDES_CACHE = join(HOME, ".claudenews/.guides-cache.json");
 
 // Read the installed plugin version from the cache dir (folder name == ver)
 // so the label tracks updates without editing this file every release.
@@ -47,10 +51,12 @@ const FEED_LABEL = _VER ? `[claude-news#${_VER}]` : "[claude-news]";
 // every command. The pick-sources guide is only in the pool until the
 // user has configured sources (then it'd be noise); the rest are evergreen.
 const GUIDE_ROTATE_MS = 20000;
+// Built-in fallback, used only until the server-driven cache lands. The
+// "/claudenews:feed to expand this item" tip was intentionally removed.
 const GUIDES_EVERGREEN = [
   "/claudenews:list to see & pick news sources",
-  "/claudenews:feed to expand this item",
   "/claudenews:translate ko to set language",
+  "/claudenews:open to open this item in your browser",
   "/claudenews:feedback <msg> to send feedback",
 ];
 const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";
@@ -178,9 +184,13 @@ if (existsSync(NEWS_FILE)) {
         ? ` \x1b[90m💬${raw.comments}\x1b[0m`
         : "";
 
-      const titleStyled = url
-        ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
-        : `\x1b[37m${title}\x1b[0m`;
+      // Only wrap the title in an OSC 8 hyperlink when the terminal can
+      // actually open it — otherwise the link is invisible/unreachable.
+      const clickable = terminalSupportsLinks();
+      const titleStyled =
+        clickable && url
+          ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
+          : `\x1b[37m${title}\x1b[0m`;
 
       newsLine =
         `\x1b[1m${FEED_LABEL}\x1b[0m ` +
@@ -190,21 +200,32 @@ if (existsSync(NEWS_FILE)) {
         scoreStr +
         commentsStr;
 
-      // Rotating usage guide appended to the END of line 1 — always shows
-      // one (cycling over time), but only if it still fits the terminal
-      // width (dropped otherwise so the news line is never pushed to wrap).
-      {
+      const usedCols = visibleCols(newsLine);
+
+      if (!clickable && url) {
+        // Link isn't clickable here (plain terminal, or tmux stripping OSC 8),
+        // so show a shortened, copyable URL right-aligned at the end of line 1
+        // in place of the rotating guide.
+        const avail = maxCols - usedCols - 2;
+        if (avail >= 8) {
+          const shortUrl = shortenUrl(url, Math.min(48, avail));
+          let su = 0;
+          for (const ch of shortUrl) su += charCols(ch.codePointAt(0));
+          const gap = maxCols - usedCols - su;
+          if (shortUrl && gap >= 1) {
+            newsLine += " ".repeat(gap) + `\x1b[2;4m${shortUrl}\x1b[0m`;
+          }
+        }
+      } else {
+        // Rotating usage guide (server-driven, built-in fallback) appended to
+        // the END of line 1 — only if it still fits so the line never wraps.
+        const evergreen = loadServerGuides() || GUIDES_EVERGREEN;
         const pool = sourcesConfigured
-          ? GUIDES_EVERGREEN
-          : [GUIDE_PICK_SOURCES, ...GUIDES_EVERGREEN];
+          ? evergreen
+          : [GUIDE_PICK_SOURCES, ...evergreen];
         const guide =
           pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];
         const HINT = "  " + guide;
-        const visible = newsLine
-          .replace(/\x1b\[[0-9;]*m/g, "")
-          .replace(/\x1b\]8;;[^\x07]*\x07/g, "");
-        let usedCols = 0;
-        for (const ch of visible) usedCols += charCols(ch.codePointAt(0));
         let hintCols = 0;
         for (const ch of HINT) hintCols += charCols(ch.codePointAt(0));
         if (usedCols + hintCols <= maxCols) {
@@ -287,6 +308,70 @@ function wrapCols(s, width, maxLines) {
   const kept = all.slice(0, maxLines);
   kept[maxLines - 1] = kept[maxLines - 1].replace(/.$/u, "") + "…";
   return kept;
+}
+
+// ── server-driven guides + link handling ───────────────────────────────────
+function loadServerGuides() {
+  try {
+    const raw = JSON.parse(readFileSync(GUIDES_CACHE, "utf-8"));
+    if (raw && Array.isArray(raw.guides)) {
+      const cleaned = raw.guides
+        .filter((x) => typeof x === "string" && x.trim())
+        .map((x) => x.trim());
+      if (cleaned.length) return cleaned;
+    }
+  } catch {}
+  return null;
+}
+
+// Visible column width of a rendered line, ignoring SGR color codes and OSC 8
+// hyperlink wrappers.
+function visibleCols(line) {
+  const visible = line
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\x1b\]8;;[^\x07]*\x07/g, "");
+  let c = 0;
+  for (const ch of visible) c += charCols(ch.codePointAt(0));
+  return c;
+}
+
+// Best-effort: can the user actually open a link here (OSC 8 hyperlink or
+// Cmd/Ctrl-click)? Conservative — unknown ⇒ false, so we fall back to printing
+// a visible URL. tmux/screen strip OSC 8 hyperlinks by default.
+function terminalSupportsLinks() {
+  if (process.env.TMUX) return false;
+  const term = process.env.TERM || "";
+  if (term.startsWith("screen") || term.startsWith("tmux")) return false;
+  const prog = process.env.TERM_PROGRAM || "";
+  const KNOWN = [
+    "iTerm.app", "Apple_Terminal", "vscode", "WezTerm",
+    "ghostty", "Hyper", "Tabby", "rio",
+  ];
+  if (KNOWN.includes(prog)) return true;
+  if (term.includes("kitty") || term.includes("wezterm")) return true;
+  if (process.env.WT_SESSION) return true; // Windows Terminal
+  if (process.env.KONSOLE_VERSION) return true;
+  if (Number(process.env.VTE_VERSION || 0) >= 5000) return true; // VTE ≥ 0.50
+  return false;
+}
+
+// Compact a URL to fit `budget` display cols: drop scheme + "www." + trailing
+// slash, then truncate with a trailing ….
+function shortenUrl(url, budget) {
+  if (budget < 8) return "";
+  const s = url
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+  let cols = 0;
+  let out = "";
+  for (const ch of s) {
+    const w = charCols(ch.codePointAt(0));
+    if (cols + w > budget - 1) return out + "…";
+    out += ch;
+    cols += w;
+  }
+  return out;
 }
 
 if (parentOutput) {
