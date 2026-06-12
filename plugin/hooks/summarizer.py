@@ -472,21 +472,33 @@ def translate_summary(text, target_lang):
     return None
 
 
+def _current_news_files():
+    """Global .current-news plus every per-session .current-news.<sid>.
+    Skips the atomic-write temp files (.tmp.<pid>)."""
+    import glob
+    return [
+        p for p in glob.glob(os.path.join(CONFIG_DIR, ".current-news*"))
+        if ".tmp." not in p
+    ]
+
+
 def update_current_news(original_title, summary):
-    if not os.path.exists(CURRENT_NEWS_FILE):
-        return
-    try:
-        with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return
-    # Match on original_title OR current title (in case translator already ran)
-    if data.get("original_title") == original_title or data.get("title") == original_title:
-        data["summary"] = summary
+    # Patch the summary into every session's record still showing this item
+    # (matched by title), plus the global file. With per-session news files a
+    # single item may be on screen in more than one session.
+    for path in _current_news_files():
         try:
-            atomic_write_json(CURRENT_NEWS_FILE, data)
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
         except Exception:
-            pass
+            continue
+        # Match on original_title OR current title (translator may have run)
+        if data.get("original_title") == original_title or data.get("title") == original_title:
+            data["summary"] = summary
+            try:
+                atomic_write_json(path, data)
+            except Exception:
+                pass
 
 
 def acquire_lock_for(key):

@@ -169,10 +169,27 @@ end tell`
   return null;
 }
 
-let newsLine = "";
-if (existsSync(NEWS_FILE)) {
+// Per-session news file: each Claude Code session rotates its own item so
+// multiple panes/sessions don't all show the same headline. The status line
+// receives the session id on stdin; fall back to the shared global file when
+// it's missing (older Claude Code) or that session hasn't rotated yet.
+let newsFilePath = NEWS_FILE;
+{
+  let sid = "";
   try {
-    const raw = JSON.parse(readFileSync(NEWS_FILE, "utf-8"));
+    sid = (JSON.parse(stdinData) || {}).session_id || "";
+  } catch {}
+  sid = String(sid).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  if (sid) {
+    const cand = join(HOME, ".claudenews", `.current-news.${sid}`);
+    if (existsSync(cand)) newsFilePath = cand;
+  }
+}
+
+let newsLine = "";
+if (existsSync(newsFilePath)) {
+  try {
+    const raw = JSON.parse(readFileSync(newsFilePath, "utf-8"));
     const age = (Date.now() - raw.timestamp) / 1000;
     if (age < NEWS_TTL_SEC) {
       const title = truncateCols(raw.title || "", maxCols);

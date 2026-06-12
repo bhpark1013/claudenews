@@ -55,22 +55,35 @@ def cache_key(text, lang):
     return f"{lang}::{text}"
 
 
+def _current_news_files():
+    """Global .current-news plus every per-session .current-news.<sid>.
+    Skips the atomic-write temp files (.tmp.<pid>)."""
+    import glob
+    return [
+        p for p in glob.glob(os.path.join(CONFIG_DIR, ".current-news*"))
+        if ".tmp." not in p
+    ]
+
+
 def update_current_news(original_title, translated_title):
-    """If .current-news still shows the original title, swap in the translation."""
-    if not os.path.exists(CURRENT_NEWS_FILE):
+    """Swap the translation into every session's record still showing the
+    original title. With per-session news files the same item may be on
+    screen in more than one session."""
+    if translated_title == original_title:
         return
-    try:
-        with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return
-    if data.get("title") == original_title and translated_title != original_title:
-        data["title"] = translated_title
-        data["original_title"] = original_title
+    for path in _current_news_files():
         try:
-            atomic_write_json(CURRENT_NEWS_FILE, data)
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
         except Exception:
-            pass
+            continue
+        if data.get("title") == original_title:
+            data["title"] = translated_title
+            data["original_title"] = original_title
+            try:
+                atomic_write_json(path, data)
+            except Exception:
+                pass
 
 
 def call_claude(title, target_lang):

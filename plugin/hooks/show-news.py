@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Fetch a dev news item and write it to .current-news for the statusline to pick up."""
 
+import glob
 import json
 import locale as _locale
 import os
+import re
 import subprocess
 import sys
 import time
@@ -28,7 +30,17 @@ GUIDES_CACHE = os.path.join(CONFIG_DIR, ".guides-cache.json")
 RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
 SOURCES_TTL_SEC = 3600
 GUIDES_TTL_SEC = 3600
-RECENT_MAX = 10  # Don't re-show a URL until this many other picks have passed
+# Global ring buffer (shared across ALL sessions): don't re-show a URL until
+# this many other picks have passed. Kept global on purpose so concurrent
+# sessions deprioritize each other's recently-shown items and diverge.
+RECENT_MAX = 24
+# Per-session .current-news.<sid> / .last_open.<sid> older than this are pruned
+# each run so abandoned sessions don't leave files lying around.
+SESSION_STALE_SEC = 6 * 3600
+# A per-session file touched within this window counts as a LIVE session whose
+# on-screen item other sessions must avoid (matches the HUD's NEWS_TTL — past
+# it the item is hidden anyway, so there's nothing left to collide with).
+SESSION_LIVE_SEC = 3600
 TRANSLATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "translator.py")
 SUMMARIZER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summarizer.py")
 
@@ -67,20 +79,76 @@ def load_config():
         return None
 
 
-def is_rate_limited():
-    if not os.path.exists(LAST_OPEN_FILE):
+def is_rate_limited(last_open_file=LAST_OPEN_FILE):
+    if not os.path.exists(last_open_file):
         return False
     try:
-        with open(LAST_OPEN_FILE, encoding="utf-8") as f:
+        with open(last_open_file, encoding="utf-8") as f:
             last = float(f.read().strip())
         return (time.time() - last) < RATE_LIMIT_SEC
     except Exception:
         return False
 
 
-def save_timestamp():
-    with open(LAST_OPEN_FILE, "w", encoding="utf-8") as f:
+def save_timestamp(last_open_file=LAST_OPEN_FILE):
+    with open(last_open_file, "w", encoding="utf-8") as f:
         f.write(str(time.time()))
+
+
+def _sanitize_sid(sid):
+    """Make a session id safe to use as a filename suffix."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(sid or ""))[:64]
+
+
+def session_files(session_id):
+    """Per-session (.current-news, .last_open) paths so each Claude Code
+    session rotates its own item. Falls back to the shared global files when
+    no session id is available (older Claude Code / no payload)."""
+    if session_id:
+        return (
+            os.path.join(CONFIG_DIR, f".current-news.{session_id}"),
+            os.path.join(CONFIG_DIR, f".last_open.{session_id}"),
+        )
+    return CURRENT_NEWS_FILE, LAST_OPEN_FILE
+
+
+def prune_stale_session_files():
+    """Remove per-session files from sessions that haven't rotated in a while
+    so they don't accumulate. The shared global files have no suffix and are
+    never matched; temp files (.tmp.<pid>) are skipped."""
+    now = time.time()
+    for pat in (".current-news.*", ".last_open.*"):
+        for p in glob.glob(os.path.join(CONFIG_DIR, pat)):
+            if ".tmp." in p:
+                continue
+            try:
+                if now - os.path.getmtime(p) > SESSION_STALE_SEC:
+                    os.remove(p)
+            except Exception:
+                pass
+
+
+def other_session_urls(self_file):
+    """URLs currently shown by OTHER live sessions, so a rotating session can
+    avoid them and two panes never display the same headline. "Live" = the
+    per-session file was touched within SESSION_LIVE_SEC; stale ones are
+    ignored (and pruned separately). The shared global file (no suffix) isn't
+    matched by the glob, so it never constrains a session's pick."""
+    urls = set()
+    now = time.time()
+    for p in glob.glob(os.path.join(CONFIG_DIR, ".current-news.*")):
+        if ".tmp." in p or p == self_file:
+            continue
+        try:
+            if now - os.path.getmtime(p) > SESSION_LIVE_SEC:
+                continue
+            with open(p, encoding="utf-8") as f:
+                u = (json.load(f) or {}).get("url", "") or ""
+            if u:
+                urls.add(u)
+        except Exception:
+            pass
+    return urls
 
 
 def maybe_heartbeat(config, api_url):
@@ -152,7 +220,7 @@ def fetch_news(api_url, sources=None):
         # Fetch a deeper pool so we can prefer items whose summary is already
         # cached (= instant render) and still have plenty of fresh items to
         # warm the cache for next time.
-        url = f"{api_url}/api/news?limit=40"
+        url = f"{api_url}/api/news?limit=60"
         if sources:
             url += "&sources=" + ",".join(sources)
         req = urllib.request.Request(url, method="GET")
@@ -356,18 +424,31 @@ def _is_github_boilerplate(text):
     return False
 
 
+_SUMMARY_CACHE_MEMO = None
+
+
+def _load_summary_cache():
+    """Load the summary cache once per process. show-news is short-lived and
+    the cache file is only written by the background summarizers it spawns
+    (which run after this process exits), so reading it once is safe and
+    avoids re-reading a ~200KB file dozens of times when scanning a 60-item
+    pool for cached candidates."""
+    global _SUMMARY_CACHE_MEMO
+    if _SUMMARY_CACHE_MEMO is None:
+        try:
+            with open(SUMMARY_CACHE, encoding="utf-8") as f:
+                _SUMMARY_CACHE_MEMO = json.load(f)
+        except Exception:
+            _SUMMARY_CACHE_MEMO = {}
+    return _SUMMARY_CACHE_MEMO if isinstance(_SUMMARY_CACHE_MEMO, dict) else {}
+
+
 def cached_summary(url, target_lang):
-    if not os.path.exists(SUMMARY_CACHE):
-        return None
-    try:
-        with open(SUMMARY_CACHE, encoding="utf-8") as f:
-            cache = json.load(f)
-        summary = cache.get(f"{target_lang}::{url}", {}).get("summary")
-        if summary and _is_github_boilerplate(summary):
-            return None  # treat as a cache miss so it gets regenerated
-        return summary
-    except Exception:
-        return None
+    entry = _load_summary_cache().get(f"{target_lang}::{url}")
+    summary = entry.get("summary") if isinstance(entry, dict) else None
+    if summary and _is_github_boilerplate(summary):
+        return None  # treat as a cache miss so it gets regenerated
+    return summary
 
 
 def launch_summarizer(url, title, target_lang):
@@ -391,12 +472,18 @@ def main():
 
     log("news hook invoked")
 
-    # Drain the hook payload. Nothing in it is needed: rotation now runs on
-    # Stop / SessionStart (not per-prompt), so there's no prompt to inspect.
+    # Read the hook payload for its session_id so each Claude Code session
+    # rotates its own news item — different panes show different headlines.
+    payload = {}
     try:
-        json.load(sys.stdin)
+        payload = json.load(sys.stdin) or {}
     except Exception:
-        pass
+        payload = {}
+    session_id = _sanitize_sid(
+        payload.get("session_id") if isinstance(payload, dict) else ""
+    )
+    cur_news_file, last_open_file = session_files(session_id)
+    prune_stale_session_files()
 
     config = load_config()
     # Config is optional for news (no auth required)
@@ -417,12 +504,12 @@ def main():
         pass_through()
         return
 
-    if is_rate_limited():
+    if is_rate_limited(last_open_file):
         log("rate limited, keeping existing news")
         pass_through()
         return
 
-    save_timestamp()
+    save_timestamp(last_open_file)
 
     catalog = fetch_sources_catalog(api_url)
     selected = resolve_sources(config, catalog)
@@ -444,9 +531,9 @@ def main():
     # re-picking the URL that was just shown.
     import random
     prev_url = ""
-    if os.path.exists(CURRENT_NEWS_FILE):
+    if os.path.exists(cur_news_file):
         try:
-            with open(CURRENT_NEWS_FILE, encoding="utf-8") as f:
+            with open(cur_news_file, encoding="utf-8") as f:
                 prev_url = (json.load(f) or {}).get("url", "") or ""
         except Exception:
             prev_url = ""
@@ -456,6 +543,11 @@ def main():
     # couple of items.
     recent = set(load_recent())
     recent.add(prev_url)
+    # Hard non-overlap across concurrently-open sessions: exclude whatever each
+    # OTHER live session is currently showing so two panes never collide on the
+    # same headline. Degrades gracefully (see the rotatable fallback below) when
+    # the candidate pool is smaller than the number of open sessions.
+    recent |= other_session_urls(cur_news_file)
 
     def _not_recent(lst):
         return [it for it in lst if it.get("url") not in recent]
@@ -528,7 +620,15 @@ def main():
     # in from a cached translation.
     record["original_title"] = original_title
 
-    atomic_write_json(CURRENT_NEWS_FILE, record)
+    # Write this session's file (what its own status line renders) and mirror
+    # it to the shared global file so /claudenews:feed (which has no session
+    # context) can still expand the most-recently-rotated item.
+    atomic_write_json(cur_news_file, record)
+    if cur_news_file != CURRENT_NEWS_FILE:
+        try:
+            atomic_write_json(CURRENT_NEWS_FILE, record)
+        except Exception:
+            pass
 
     # Launch background translation if needed and not yet cached
     if title_needs_translation and display_title == original_title:
@@ -540,13 +640,24 @@ def main():
         launch_summarizer(url, original_title, summary_lang)
         log(f"launched summarizer ({summary_lang})")
 
-    # Pre-warm cache: launch summarizers for up to PREWARM_MAX uncached
-    # candidates so the next prompt is more likely to hit a cached pick.
-    # Capped to avoid spawning a Claude subprocess per item when limit=40.
-    PREWARM_MAX = 5
+    # Pre-warm cache so rotation has enough cached-summary items to draw from
+    # WITHOUT re-summarizing forever. Summaries are cached permanently
+    # (.summary-cache.json), so this is a one-time warm-up, not a steady drip:
+    # once the current pool already holds TARGET_CACHED summaries we spawn
+    # nothing. Each run tops up at most PREWARM_PER_RUN new items — a hard cap
+    # on Claude subprocesses, which matters now that every session rotates
+    # independently (more rotations = more potential spawns).
+    TARGET_CACHED = RECENT_MAX + 6  # ~30: a little over the rotation buffer
+    PREWARM_PER_RUN = 4
+    already_cached = sum(
+        1 for it in items
+        if isinstance(it, dict) and it.get("url")
+        and cached_summary(it["url"], summary_lang)
+    )
+    budget = min(PREWARM_PER_RUN, max(0, TARGET_CACHED - already_cached))
     prewarmed = 0
     for item in items:
-        if prewarmed >= PREWARM_MAX:
+        if prewarmed >= budget:
             break
         if not isinstance(item, dict):
             continue
@@ -559,7 +670,10 @@ def main():
         launch_summarizer(item_url, item_title, summary_lang)
         prewarmed += 1
     if prewarmed:
-        log(f"pre-warmed {prewarmed} summarizers ({summary_lang})")
+        log(
+            f"pre-warmed {prewarmed}/{budget} summarizers "
+            f"({already_cached}/{TARGET_CACHED} cached, {summary_lang})"
+        )
 
     pass_through()
 
