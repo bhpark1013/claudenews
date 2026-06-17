@@ -12,7 +12,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -69,23 +69,27 @@ let parentOutput = "";
 let maxCols = 120; // safe default — Claude Code's statusline doesn't pass width
 let userOverrodeMaxCols = false;
 let sourcesConfigured = false;
+let navEnabled = false;
+// Summary line color (SGR params). Default to a readable light gray instead of
+// the faint/dim attribute (\x1b[2m), which many terminals render too low-contrast
+// to read. Override via config "summaryColor" (e.g. "37" plain white, "38;5;245"
+// dimmer gray, "38;5;252" brighter). Validated to digits/semicolons only.
+let summaryColor = "38;5;250";
 if (existsSync(CONFIG_FILE)) {
   try {
     const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
     sourcesConfigured = cfg.sourcesConfigured === true;
+    navEnabled = cfg.navEnabled === true;
+    if (typeof cfg.summaryColor === "string" && /^[0-9;]+$/.test(cfg.summaryColor)) {
+      summaryColor = cfg.summaryColor;
+    }
     if (typeof cfg.maxStatuslineCols === "number" && cfg.maxStatuslineCols > 20) {
       maxCols = cfg.maxStatuslineCols;
       userOverrodeMaxCols = true;
     }
     const parentCmd = (cfg.parentStatusLine || "").trim();
     if (parentCmd) {
-      const result = spawnSync(parentCmd, [], {
-        shell: true,
-        input: stdinData,
-        encoding: "utf-8",
-        timeout: 3000,
-      });
-      parentOutput = (result.stdout || "").trimEnd();
+      parentOutput = cachedParentOutput(parentCmd);
     }
   } catch {}
 }
@@ -95,10 +99,79 @@ if (existsSync(CONFIG_FILE)) {
 // environment: cmux RPC → tmux display-message → stty via /dev/tty. Each
 // channel either works in its environment or fails fast.
 if (!userOverrodeMaxCols) {
-  const detected = detectTerminalCols();
+  const detected = detectTerminalColsCached();
   if (detected && detected > 20) {
     maxCols = detected;
   }
+}
+
+// Cache the detected width so the (possibly expensive, e.g. iTerm AppleScript)
+// probe runs at most once per TTL instead of on EVERY status-line render. This
+// lets refreshInterval go low without paying osascript each frame; a terminal
+// resize is reflected within the TTL.
+// Stable per-pane cache key. Terminal width is PER-PANE, so the width cache
+// must be too: keying by the Claude Code session id (1:1 with a pane,
+// terminal-agnostic, always present on stdin) — falling back to the terminal's
+// own pane id — stops panes of different widths from clobbering one shared
+// cache file every TTL, which made the summary re-wrap to a different line
+// count each render (the status bar visibly "flickered" between N and N+1 lines).
+function paneCacheKey() {
+  try {
+    const sid = (JSON.parse(stdinData) || {}).session_id;
+    if (sid) return String(sid).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  } catch {}
+  const pane = process.env.ITERM_SESSION_ID || process.env.TMUX_PANE || "";
+  return pane.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64) || "default";
+}
+
+function detectTerminalColsCached() {
+  const CACHE = join(HOME, `.claudenews/.cols-cache.${paneCacheKey()}`);
+  const TTL_MS = 5000;
+  try {
+    const raw = JSON.parse(readFileSync(CACHE, "utf-8"));
+    if (raw && typeof raw.cols === "number" && Date.now() - raw.ts < TTL_MS) {
+      return raw.cols;
+    }
+  } catch {}
+  const cols = detectTerminalCols();
+  if (cols && cols > 20) {
+    try {
+      writeFileSync(CACHE, JSON.stringify({ cols, ts: Date.now() }));
+    } catch {}
+  }
+  return cols;
+}
+
+// The upstream statusline (e.g. the OMC HUD) is by far the costliest part of a
+// render — ~0.17s vs ~0.03s for the news line — so re-running it on EVERY frame
+// is what makes a low refreshInterval expensive. Cache its stdout per-session
+// for a short TTL: the news line still re-renders every frame (so key-nav feels
+// instant) while the upstream line refreshes only every TTL. Keyed per-session
+// because the upstream output is session-specific (model / dir / context); a
+// shared file would show one session's HUD in another. Transient failures
+// (empty stdout / timeout) are NOT cached so the next frame retries.
+function cachedParentOutput(parentCmd) {
+  const CACHE = join(HOME, `.claudenews/.parent-cache.${paneCacheKey()}`);
+  const TTL_MS = 2000;
+  try {
+    const raw = JSON.parse(readFileSync(CACHE, "utf-8"));
+    if (raw && typeof raw.out === "string" && Date.now() - raw.ts < TTL_MS) {
+      return raw.out;
+    }
+  } catch {}
+  const result = spawnSync(parentCmd, [], {
+    shell: true,
+    input: stdinData,
+    encoding: "utf-8",
+    timeout: 3000,
+  });
+  const out = (result.stdout || "").trimEnd();
+  if (out) {
+    try {
+      writeFileSync(CACHE, JSON.stringify({ out, ts: Date.now() }));
+    } catch {}
+  }
+  return out;
 }
 
 function detectTerminalCols() {
@@ -173,8 +246,10 @@ end tell`
 // multiple panes/sessions don't all show the same headline. The status line
 // receives the session id on stdin; fall back to the shared global file when
 // it's missing (older Claude Code) or that session hasn't rotated yet.
+// In nav mode news is global (every session shows the same item), so read the
+// shared file directly. Otherwise prefer this session's own rotated item.
 let newsFilePath = NEWS_FILE;
-{
+if (!navEnabled) {
   let sid = "";
   try {
     sid = (JSON.parse(stdinData) || {}).session_id || "";
@@ -200,13 +275,12 @@ if (existsSync(newsFilePath)) {
         ? ` \x1b[90m💬${raw.comments}\x1b[0m`
         : "";
 
-      // Only wrap the title in an OSC 8 hyperlink when the terminal can
-      // actually open it — otherwise the link is invisible/unreachable.
-      const clickable = terminalSupportsLinks();
-      const titleStyled =
-        clickable && url
-          ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
-          : `\x1b[37m${title}\x1b[0m`;
+      // Title is always an OSC 8 hyperlink so a click / ⌘-click opens the
+      // article. Terminals without OSC 8 support just render the plain title
+      // (the escape is invisible), so this is safe everywhere.
+      const titleStyled = url
+        ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
+        : `\x1b[37m${title}\x1b[0m`;
 
       newsLine =
         `\x1b[1m${FEED_LABEL}\x1b[0m ` +
@@ -216,32 +290,25 @@ if (existsSync(newsFilePath)) {
         scoreStr +
         commentsStr;
 
-      const usedCols = visibleCols(newsLine);
-
-      if (!clickable && url) {
-        // Link isn't clickable here (plain terminal, or tmux stripping OSC 8),
-        // so show a shortened, copyable URL right-aligned at the end of line 1
-        // in place of the rotating guide.
-        const avail = maxCols - usedCols - 2;
-        if (avail >= 8) {
-          const shortUrl = shortenUrl(url, Math.min(48, avail));
-          let su = 0;
-          for (const ch of shortUrl) su += charCols(ch.codePointAt(0));
-          const gap = maxCols - usedCols - su;
-          if (shortUrl && gap >= 1) {
-            newsLine += " ".repeat(gap) + `\x1b[2;4m${shortUrl}\x1b[0m`;
-          }
-        }
-      } else {
-        // Rotating usage guide (server-driven, built-in fallback) appended to
-        // the END of line 1 — only if it still fits so the line never wraps.
+      // Rotating usage guide appended to the END of line 1 (server-driven,
+      // built-in fallback) — only if it still fits so the line never wraps.
+      {
         const evergreen = loadServerGuides() || GUIDES_EVERGREEN;
-        const pool = sourcesConfigured
+        let pool = sourcesConfigured
           ? evergreen
           : [GUIDE_PICK_SOURCES, ...evergreen];
+        // Key-navigation tips. The activation tip appears ONLY on terminals we
+        // can actually drive (never advertise a feature that can't work here)
+        // and only while nav is still off; once on, show the shortcut instead.
+        if (navEnabled) {
+          pool = ["ctrl+←/→ to browse news", ...pool];
+        } else if (terminalSupportsNav()) {
+          pool = ["/claudenews:nav on — browse news with ctrl+←/→", ...pool];
+        }
         const guide =
           pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];
         const HINT = "  " + guide;
+        const usedCols = visibleCols(newsLine);
         let hintCols = 0;
         for (const ch of HINT) hintCols += charCols(ch.codePointAt(0));
         if (usedCols + hintCols <= maxCols) {
@@ -260,9 +327,9 @@ if (existsSync(newsFilePath)) {
         const wrapped = wrapCols(summary, innerWidth, 12);
         wrapped.forEach((ln, i) => {
           if (i === 0) {
-            newsLine += `\n\x1b[90m       ↳\x1b[0m \x1b[2m${ln}\x1b[0m`;
+            newsLine += `\n\x1b[90m       ↳\x1b[0m \x1b[${summaryColor}m${ln}\x1b[0m`;
           } else {
-            newsLine += `\n         \x1b[2m${ln}\x1b[0m`;
+            newsLine += `\n         \x1b[${summaryColor}m${ln}\x1b[0m`;
           }
         });
       }
@@ -326,7 +393,7 @@ function wrapCols(s, width, maxLines) {
   return kept;
 }
 
-// ── server-driven guides + link handling ───────────────────────────────────
+// ── server-driven guides ────────────────────────────────────────────────────
 function loadServerGuides() {
   try {
     const raw = JSON.parse(readFileSync(GUIDES_CACHE, "utf-8"));
@@ -351,43 +418,21 @@ function visibleCols(line) {
   return c;
 }
 
-// Best-effort: can the user actually open a link here (OSC 8 hyperlink or
-// Cmd/Ctrl-click)? Conservative — unknown ⇒ false, so we fall back to printing
-// a visible URL. tmux/screen strip OSC 8 hyperlinks by default.
-function terminalSupportsLinks() {
-  if (process.env.TMUX) return false;
+// Best-effort: is this a terminal whose focused pane's tty the Hammerspoon nav
+// tap can resolve (to confirm Claude Code is focused before acting)? Used only
+// to decide whether to advertise /claudenews:nav. Conservative — tmux/ssh and
+// unknown/unsupported terminals (Ghostty<1.4, Warp, Alacritty, VS Code) ⇒ false
+// so we never suggest the feature where it can't work.
+function terminalSupportsNav() {
+  if (process.env.TMUX) return false; // tmux hides the outer terminal
   const term = process.env.TERM || "";
   if (term.startsWith("screen") || term.startsWith("tmux")) return false;
   const prog = process.env.TERM_PROGRAM || "";
-  const KNOWN = [
-    "iTerm.app", "Apple_Terminal", "vscode", "WezTerm",
-    "ghostty", "Hyper", "Tabby", "rio",
-  ];
-  if (KNOWN.includes(prog)) return true;
-  if (term.includes("kitty") || term.includes("wezterm")) return true;
-  if (process.env.WT_SESSION) return true; // Windows Terminal
-  if (process.env.KONSOLE_VERSION) return true;
-  if (Number(process.env.VTE_VERSION || 0) >= 5000) return true; // VTE ≥ 0.50
-  return false;
-}
-
-// Compact a URL to fit `budget` display cols: drop scheme + "www." + trailing
-// slash, then truncate with a trailing ….
-function shortenUrl(url, budget) {
-  if (budget < 8) return "";
-  const s = url
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/+$/, "");
-  let cols = 0;
-  let out = "";
-  for (const ch of s) {
-    const w = charCols(ch.codePointAt(0));
-    if (cols + w > budget - 1) return out + "…";
-    out += ch;
-    cols += w;
+  if (prog === "iTerm.app" || prog === "Apple_Terminal" || prog === "WezTerm") {
+    return true;
   }
-  return out;
+  if (process.env.KITTY_WINDOW_ID || term.includes("kitty")) return true;
+  return false;
 }
 
 if (parentOutput) {

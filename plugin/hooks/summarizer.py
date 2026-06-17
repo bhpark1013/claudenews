@@ -573,6 +573,9 @@ def main():
     target_lang = sys.argv[1]
     url = sys.argv[2]
     original_title = sys.argv[3]
+    # Optional feed-provided body (Reddit/Mastodon/…), used as the summary
+    # source when the page can't be scraped.
+    raw_text_arg = sys.argv[4] if len(sys.argv) >= 5 else ""
 
     if not url or not original_title:
         sys.exit(0)
@@ -622,6 +625,10 @@ def main():
             # Prefer real body text (avoids "1-line og padded to 3
             # sentences"); fall back to the meta description.
             raw_desc = fetch_article_text(target) or fetch_meta_description(target)
+        # Feed-provided body fallback (Reddit/Mastodon/…): use it when the page
+        # yields nothing scrapable. Short bodies are caught by the length gate below.
+        if (not raw_desc or is_likely_boilerplate(raw_desc)) and len(raw_text_arg) >= 40:
+            raw_desc = raw_text_arg
         if not raw_desc or is_likely_boilerplate(raw_desc):
             write_status(url, "error")
             return

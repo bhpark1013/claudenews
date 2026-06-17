@@ -28,6 +28,12 @@ SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
 GUIDES_CACHE = os.path.join(CONFIG_DIR, ".guides-cache.json")
 RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
+# Opt-in key-driven navigation (config.navEnabled). An ordered candidate list
+# + a global cursor let cmd+ctrl+←/→ step prev/next; a short pin keeps a manual
+# pick from being clobbered by auto-rotation.
+NEWS_LIST_FILE = os.path.join(CONFIG_DIR, ".news-list.json")
+NAV_STATE_FILE = os.path.join(CONFIG_DIR, ".nav-state.json")
+NAV_PIN_SEC = 300
 SOURCES_TTL_SEC = 3600
 GUIDES_TTL_SEC = 3600
 # Global ring buffer (shared across ALL sessions): don't re-show a URL until
@@ -390,7 +396,10 @@ def cached_translation(title, target_lang):
 
 
 def launch_translator(title, target_lang):
-    """Spawn translator as background process. Non-blocking."""
+    """Spawn translator as background process. Non-blocking. Duplicate spawns for
+    a title already in flight are cheap and self-limiting: translator.py acquires
+    a self-releasing per-title lock and exits BEFORE the model call if another is
+    already running, then frees the lock on completion so retries aren't blocked."""
     try:
         subprocess.Popen(
             ["python3", TRANSLATOR, target_lang, title],
@@ -451,10 +460,18 @@ def cached_summary(url, target_lang):
     return summary
 
 
-def launch_summarizer(url, title, target_lang):
+def launch_summarizer(url, title, target_lang, raw_text=""):
+    # Duplicate spawns are cheap and self-limiting: summarizer.py holds a
+    # self-releasing per-url lock and exits early if one is already in flight.
+    # raw_text (optional) is feed-provided body for sources whose pages can't be
+    # scraped (Reddit/Mastodon/…) — summarizer.py uses it when the URL yields no
+    # description. Passed as argv (list form → no shell, safe for any content).
+    args = ["python3", SUMMARIZER, target_lang, url, title]
+    if raw_text:
+        args.append(raw_text)
     try:
         subprocess.Popen(
-            ["python3", SUMMARIZER, target_lang, url, title],
+            args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -463,6 +480,325 @@ def launch_summarizer(url, title, target_lang):
         )
     except Exception as e:
         log(f"summarizer launch failed: {e}")
+
+
+def prewarm_translations(items, target_lang, budget=5):
+    """Translate up to `budget` not-yet-cached titles from the list in the
+    background. Without this only the picked/landed item is translated, so
+    navigating shows many untranslated titles. Titles are cheap and cached
+    permanently, so this fills the whole list over a few invocations. Deduped by
+    cached_translation + translator.py's self-releasing per-title lock, so once
+    the list is translated later calls spawn nothing."""
+    warmed = 0
+    for it in items:
+        if warmed >= budget:
+            break
+        if not isinstance(it, dict):
+            continue
+        t = it.get("title") or ""
+        if not t or it.get("lang") == target_lang:
+            continue
+        if cached_translation(t, target_lang):
+            continue
+        launch_translator(t, target_lang)
+        warmed += 1
+    if warmed:
+        log(f"pre-warmed {warmed} translators ({target_lang})")
+    return warmed
+
+
+def nav_enabled(config):
+    return bool((config or {}).get("navEnabled"))
+
+
+# ── client-fetched feed sources ──────────────────────────────────────────────
+# News reaches one shared pool through two interchangeable TRANSPORTS:
+#   • server   — selected catalog ids sent to the API, fetched server-side
+#   • client   — RSS/Atom URLs fetched directly from THIS machine
+# Both yield the same item shape and flow through rotation / nav / translation /
+# summary identically — nothing downstream knows or cares which transport a item
+# came from. Client feeds exist for any feed the server can't reach: e.g. Reddit
+# 403s its .json and the server's datacenter IP, but www.reddit.com/r/<sub>/.rss
+# works from a normal machine with a browser UA. There is NO source-specific
+# code — Reddit/Mastodon/Bluesky/etc. are just URLs in the clientFeeds list:
+#   config: "clientFeeds": [
+#     {"name": "👽 r/programming", "url": "https://www.reddit.com/r/programming/.rss"},
+#     {"name": "🐘 #rust", "url": "https://mastodon.social/tags/rust.rss", "lang": "en"}
+#   ]
+CLIENTFEEDS_CACHE_FILE = os.path.join(CONFIG_DIR, ".clientfeeds-cache.json")
+CLIENTFEEDS_TTL_SEC = 900       # refetch a client feed at most every 15 min
+CLIENTFEED_PER_SOURCE = 12      # cap items kept per feed
+# A browser UA: required by Reddit, harmless for any other feed.
+CLIENTFEED_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+def parse_feed(xml_text):
+    """Parse RSS 2.0 or Atom into [{'title','link'}]. Namespace-agnostic: matches
+    on the local tag name so one parser handles every feed flavor."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+
+    def lname(tag):
+        return tag.rsplit("}", 1)[-1].lower()
+
+    out = []
+    for el in root.iter():
+        if lname(el.tag) not in ("item", "entry"):
+            continue
+        title, link, bodies = None, None, {}
+        for child in el:
+            lt = lname(child.tag)
+            if lt == "title" and child.text and not title:
+                title = child.text.strip()
+            elif lt == "link":
+                href = child.get("href")            # Atom: <link href="..."/>
+                if href:
+                    if link is None or child.get("rel") in (None, "alternate"):
+                        link = href
+                elif child.text and not link:        # RSS: <link>text</link>
+                    link = child.text.strip()
+            elif lt in ("content", "encoded", "description", "summary") and child.text:
+                # Feed-provided body. Reddit/Mastodon/etc. carry the post text
+                # here, which is the only summarizable source for feeds whose
+                # pages block scraping. Prefer full content over a short summary.
+                bodies.setdefault(lt, child.text)
+        if title and link:
+            body = (
+                bodies.get("content") or bodies.get("encoded")
+                or bodies.get("description") or bodies.get("summary") or ""
+            )
+            out.append({"title": title, "link": link, "body": body})
+    return out
+
+
+def _strip_html(s):
+    import html as _html
+    if not s:
+        return ""
+    t = re.sub(r"<[^>]+>", " ", _html.unescape(s))
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def fetch_client_feeds(feeds):
+    """Fetch each client feed URL directly and map entries to news items.
+    Source-agnostic; best-effort (a failing feed is logged and skipped)."""
+    out, seen = [], set()
+    for f in feeds:
+        if not isinstance(f, dict):
+            continue
+        url = (f.get("url") or "").strip()
+        if not url:
+            continue
+        name = (f.get("name") or "").strip() or url
+        lang = (f.get("lang") or "en").strip() or "en"
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": CLIENTFEED_UA, "Accept": "*/*"}
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                xml = resp.read(1_000_000).decode("utf-8", "replace")
+        except Exception as e:
+            log(f"client feed fetch failed ({name}): {e}")
+            continue
+        n = 0
+        for entry in parse_feed(xml):
+            if n >= CLIENTFEED_PER_SOURCE:
+                break
+            if entry["link"] in seen:
+                continue
+            seen.add(entry["link"])
+            out.append({
+                "title": entry["title"], "url": entry["link"],
+                "source": name, "lang": lang, "clientfeed": True,
+                "feed_text": _strip_html(entry.get("body", ""))[:1500],
+            })
+            n += 1
+    return out
+
+
+def load_clientfeeds_cache():
+    try:
+        with open(CLIENTFEEDS_CACHE_FILE, encoding="utf-8") as f:
+            d = json.load(f) or {}
+        return (d.get("items") or [], int(d.get("ts", 0)))
+    except Exception:
+        return [], 0
+
+
+def refresh_clientfeeds_cache(feeds):
+    items = fetch_client_feeds(feeds)
+    if items:
+        atomic_write_json(
+            CLIENTFEEDS_CACHE_FILE, {"items": items, "ts": int(time.time() * 1000)}
+        )
+        log(f"client feeds refreshed: {len(items)} items from {len(feeds)} feed(s)")
+        # Summarize feed-provided body in the background. These sources' pages
+        # usually block scraping (Reddit 403s), but the RSS carries the post
+        # text, so feed_text is the summary source. Short bodies (link posts,
+        # boilerplate) fall under the summarizer's min-length gate and are
+        # skipped there. Capped per run; cached_summary dedupes across runs.
+        try:
+            tr_enabled, target_lang = translation_settings(load_config())
+            slang = target_lang if tr_enabled else "en"
+            CF_SUMMARIZE_PER_RUN = 6
+            done = 0
+            for it in items:
+                if done >= CF_SUMMARIZE_PER_RUN:
+                    break
+                ft = it.get("feed_text") or ""
+                if len(ft) >= 40 and not cached_summary(it["url"], slang):
+                    launch_summarizer(it["url"], it["title"], slang, raw_text=ft)
+                    done += 1
+        except Exception as e:
+            log(f"client feed summarize error: {e}")
+    return items
+
+
+def _spawn_clientfeeds_refresh():
+    """Refresh client feeds in a DETACHED process so the 5s news hook never
+    blocks on their network fetch."""
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--feeds-refresh"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        log(f"client feeds refresh spawn failed: {e}")
+
+
+def merge_client_feeds(items, config):
+    """Prepend cached client-feed items to the pool and kick off a background
+    refresh when the cache is stale. No-op unless config['clientFeeds'] is set."""
+    feeds = (config or {}).get("clientFeeds") or []
+    if not isinstance(feeds, list) or not feeds:
+        return items
+    c_items, c_ts = load_clientfeeds_cache()
+    if c_items:
+        have = {it.get("url") for it in items if isinstance(it, dict)}
+        items = [it for it in c_items if it.get("url") not in have] + items
+    if time.time() * 1000 - c_ts > CLIENTFEEDS_TTL_SEC * 1000:
+        _spawn_clientfeeds_refresh()
+    return items
+
+
+def save_news_list(items):
+    """Persist the ordered candidate list so --nav can step through it."""
+    slim = [
+        {k: it.get(k) for k in ("title", "url", "source", "score", "comments", "lang")}
+        for it in items
+        if isinstance(it, dict) and it.get("url")
+    ]
+    atomic_write_json(NEWS_LIST_FILE, {"items": slim, "ts": int(time.time() * 1000)})
+    return slim
+
+
+def load_news_list():
+    try:
+        with open(NEWS_LIST_FILE, encoding="utf-8") as f:
+            data = json.load(f) or {}
+        items = data.get("items")
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def load_nav_state():
+    try:
+        with open(NAV_STATE_FILE, encoding="utf-8") as f:
+            s = json.load(f) or {}
+        return int(s.get("index", 0)), float(s.get("pinnedUntil", 0))
+    except Exception:
+        return 0, 0.0
+
+
+def save_nav_state(index, pinned_until):
+    atomic_write_json(
+        NAV_STATE_FILE, {"index": int(index), "pinnedUntil": float(pinned_until)}
+    )
+
+
+def build_record(item, translate_enabled, target_lang):
+    """Build a .current-news record for one list item using ONLY cached
+    translation + summary (no network, no spawns) so nav feels instant."""
+    summary_lang = target_lang if translate_enabled else "en"
+    original_title = item.get("title", "") or ""
+    url = item.get("url", "") or ""
+    display_title = original_title
+    if translate_enabled and item.get("lang") != target_lang:
+        cached = cached_translation(original_title, target_lang)
+        if cached:
+            display_title = cached
+    record = {
+        "title": display_title,
+        "url": url,
+        "source": item.get("source", "") or "",
+        "score": item.get("score"),
+        "comments": item.get("comments"),
+        "timestamp": int(time.time() * 1000),
+        "original_title": original_title,
+    }
+    summary = cached_summary(url, summary_lang) if url else None
+    if summary:
+        record["summary"] = summary
+    return record
+
+
+def do_nav(direction):
+    """--nav next|prev: step the global cursor over the cached list, write the
+    shared .current-news, and pin it so auto-rotation won't immediately undo it."""
+    config = load_config()
+    items = load_news_list()
+    if not items:
+        log("nav: no cached list yet")
+        return
+    index, _pinned = load_nav_state()
+    step = -1 if direction == "prev" else 1
+    index = (index + step) % len(items)
+    translate_enabled, target_lang = translation_settings(config)
+    item = items[index]
+    record = build_record(item, translate_enabled, target_lang)
+    atomic_write_json(CURRENT_NEWS_FILE, record)
+    save_nav_state(index, time.time() + NAV_PIN_SEC)
+
+    # Lazy backfill: if this item isn't summarized/translated yet, spawn the
+    # background workers. They rewrite .current-news when done (matched by
+    # original_title), so the description/translation fills in on the next
+    # status-line refresh instead of staying blank.
+    url = item.get("url", "") or ""
+    original_title = item.get("title", "") or ""
+    summary_lang = target_lang if translate_enabled else "en"
+    if url and not cached_summary(url, summary_lang):
+        launch_summarizer(url, original_title, summary_lang)
+    if (translate_enabled and item.get("lang") != target_lang
+            and not cached_translation(original_title, target_lang)):
+        launch_translator(original_title, target_lang)
+
+    # Look-ahead: warm the next items in the travel direction so flipping stays
+    # instant instead of each item starting its translation only once landed on.
+    # Titles are cheap (translate 6 ahead); summaries are heavier (2 ahead).
+    # translator.py / summarizer.py each hold a self-releasing per-item lock, so
+    # duplicate spawns (on-landing + fast repeat presses) exit cheaply.
+    for off in range(1, 7):
+        nxt = items[(index + step * off) % len(items)]
+        if not isinstance(nxt, dict):
+            continue
+        n_title = nxt.get("title") or ""
+        n_url = nxt.get("url") or ""
+        if (translate_enabled and nxt.get("lang") != target_lang
+                and n_title and not cached_translation(n_title, target_lang)):
+            launch_translator(n_title, target_lang)
+        if off <= 2 and n_url and not cached_summary(n_url, summary_lang):
+            launch_summarizer(n_url, n_title, summary_lang)
+    log(f"nav {direction} -> [{index}/{len(items)}] {record.get('title', '')[:40]}")
 
 
 def main():
@@ -493,6 +829,13 @@ def main():
         enabled = config.get("newsEnabled", True)
         api_url = config.get("apiUrl", DEFAULT_API)
 
+    # Opt-in key navigation makes news GLOBAL: every session reads the shared
+    # .current-news so cmd+ctrl+←/→ moves all panes together. When off, the
+    # per-session rotation below is left exactly as it was.
+    global_mode = nav_enabled(config)
+    if global_mode:
+        cur_news_file, last_open_file = CURRENT_NEWS_FILE, LAST_OPEN_FILE
+
     # Daily active-user heartbeat. Runs before the news enabled/rate-limit
     # gates so a still-installed client counts as active even with news off;
     # it self-throttles to once per UTC day and never blocks (detached).
@@ -515,6 +858,9 @@ def main():
     selected = resolve_sources(config, catalog)
     response = fetch_news(api_url, selected)
     items = (response or {}).get("items") or []
+    # Merge in client-fetched feed items (pulled directly from this machine) so
+    # they rotate/nav alongside server sources. No-op unless clientFeeds is set.
+    items = merge_client_feeds(items, config)
     api_pick = (response or {}).get("pick")
     if not api_pick and not items:
         log("no news received")
@@ -530,6 +876,24 @@ def main():
     # instead of locking onto the first cached one in API order. Avoid
     # re-picking the URL that was just shown.
     import random
+
+    # Global (nav) mode: persist the ordered list for --nav and, if the user
+    # navigated by hand recently, keep their pinned pick instead of rotating.
+    saved_list = None
+    if global_mode:
+        saved_list = save_news_list(items)
+        # Fill the whole list's translations in the background — BEFORE the pin
+        # check, so chatting while the nav is pinned (i.e. right after the user
+        # started browsing) still warms the cache. Otherwise flipping to any
+        # not-yet-landed item shows it untranslated until its on-landing spawn.
+        if translate_enabled:
+            prewarm_translations(saved_list, target_lang)
+        _idx, pinned_until = load_nav_state()
+        if time.time() < pinned_until:
+            log("nav pinned — keeping current item, skipping rotation")
+            pass_through()
+            return
+
     prev_url = ""
     if os.path.exists(cur_news_file):
         try:
@@ -547,14 +911,22 @@ def main():
     # OTHER live session is currently showing so two panes never collide on the
     # same headline. Degrades gracefully (see the rotatable fallback below) when
     # the candidate pool is smaller than the number of open sessions.
-    recent |= other_session_urls(cur_news_file)
+    if not global_mode:
+        # Cross-session non-overlap only applies to per-session mode; global
+        # (nav) mode intentionally shows the same item in every session.
+        recent |= other_session_urls(cur_news_file)
 
     def _not_recent(lst):
         return [it for it in lst if it.get("url") not in recent]
 
+    # Eligible for rotation = has a cached summary (instant full render) OR is a
+    # client-feed item. Client feeds (e.g. Reddit) never get a scrapable summary,
+    # but should still rotate into the status line (title-only) instead of being
+    # reachable by nav only.
     cached_candidates = [
         it for it in items
-        if isinstance(it, dict) and it.get("url") and cached_summary(it["url"], summary_lang)
+        if isinstance(it, dict) and it.get("url")
+        and (cached_summary(it["url"], summary_lang) or it.get("clientfeed"))
     ]
     # Prefer cached-summary items not shown recently; degrade gracefully so we
     # still end up with something when everything's been seen.
@@ -630,6 +1002,15 @@ def main():
         except Exception:
             pass
 
+    # Keep the nav cursor pointed at whatever auto-rotation just chose, so the
+    # next cmd+ctrl+→ steps forward from here. Unpinned (pinnedUntil=0).
+    if global_mode and saved_list is not None:
+        try:
+            idx = next(i for i, it in enumerate(saved_list) if it.get("url") == url)
+        except StopIteration:
+            idx = 0
+        save_nav_state(idx, 0)
+
     # Launch background translation if needed and not yet cached
     if title_needs_translation and display_title == original_title:
         launch_translator(original_title, target_lang)
@@ -675,8 +1056,29 @@ def main():
             f"({already_cached}/{TARGET_CACHED} cached, {summary_lang})"
         )
 
+    # Pre-warm TRANSLATIONS for the list (non-nav mode; nav mode already did this
+    # before the pin check). Previously only the picked item was translated, so
+    # rotating/navigating showed many untranslated titles until each was landed
+    # on. Cheap and cached permanently — a one-time fill over a few rotations.
+    if translate_enabled and not global_mode:
+        prewarm_translations(items, target_lang)
+
     pass_through()
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--feeds-refresh":
+        try:
+            _cfg = load_config()
+            refresh_clientfeeds_cache((_cfg or {}).get("clientFeeds") or [])
+        except Exception as e:
+            log(f"client feeds refresh error: {e}")
+        sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == "--nav":
+        _direction = sys.argv[2] if len(sys.argv) >= 3 else "next"
+        try:
+            do_nav("prev" if _direction == "prev" else "next")
+        except Exception as e:
+            log(f"nav error: {e}")
+        sys.exit(0)
     main()
