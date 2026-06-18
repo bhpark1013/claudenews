@@ -57,6 +57,7 @@ const GUIDES_EVERGREEN = [
   "/claudenews:list to see & pick news sources",
   "/claudenews:translate ko to set language",
   "/claudenews:feedback <msg> to send feedback",
+  "add your own RSS/Reddit feeds in ~/.claudenews/config.json",
 ];
 const GUIDE_PICK_SOURCES = "/claudenews:list to pick your news sources";
 
