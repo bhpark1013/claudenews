@@ -16,6 +16,7 @@ NAV_LAUNCHER="$HUD_DIR/claudenews-nav"
 LUA_SRC="$PLUGIN_ROOT/hammerspoon/claudenews-nav.lua"
 LUA_DST="$CONFIG_DIR/claudenews-nav.lua"
 HS_INIT="$HOME/.hammerspoon/init.lua"
+SETTINGS="$HOME/.claude/settings.json"
 
 mkdir -p "$CONFIG_DIR" "$HUD_DIR"
 [ -f "$CONFIG_FILE" ] || echo "{}" > "$CONFIG_FILE"
@@ -83,6 +84,29 @@ reload_hammerspoon() {
   n=0; while ! pgrep -x Hammerspoon >/dev/null 2>&1 && [ "$n" -lt 200 ]; do n=$((n + 1)); done
 }
 
+# Set the statusLine refresh cadence so key nav feels responsive. ONLY touches
+# the statusLine if our HUD owns it (setup was run) — never clobbers a statusLine
+# we don't control. Safe no-op if settings.json is missing/unparseable.
+set_refresh_interval() { # $1 = seconds
+  python3 - "$SETTINGS" "$1" <<'PY'
+import json, sys
+path, val = sys.argv[1], int(sys.argv[2])
+try:
+    s = json.load(open(path))
+except Exception:
+    sys.exit(0)
+sl = s.get("statusLine")
+if not isinstance(sl, dict) or "claudenews-hud" not in (sl.get("command") or ""):
+    sys.exit(0)  # not our statusLine — leave it alone
+if sl.get("refreshInterval") == val:
+    sys.exit(0)
+sl["refreshInterval"] = val
+json.dump(s, open(path, "w"), indent=2, ensure_ascii=False)
+open(path, "a").write("\n")
+print("  statusLine refreshInterval set to %ds (snappy key nav) — restart Claude Code to apply" % val)
+PY
+}
+
 case "$ACTION" in
   on)
     set_flag true
@@ -114,6 +138,7 @@ case "$ACTION" in
       echo "  rerun /claudenews:nav on (it launches Hammerspoon and loads the tap):"
       echo "      brew install --cask hammerspoon"
     fi
+    set_refresh_interval 1
     echo ""
     echo "  Wired into: $HS_INIT"
     echo "  Disable anytime with:  /claudenews:nav off"
