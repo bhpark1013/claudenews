@@ -153,7 +153,11 @@ A few optional knobs you can set by hand (the plugin manages the rest):
   from your own machine instead. Reddit is the headline case: it 403s
   datacenter IPs, but `www.reddit.com/r/<sub>/.rss` works from a normal
   machine. Items flow through rotation / nav / translation / summary exactly
-  like built-in sources — there's no per-source code, just URLs:
+  like built-in sources — there's no per-source code, just URLs.
+
+  Easiest way to add one: **`/claudenews:list add r/<sub>`** (or just ask
+  Claude — *"add r/rust"*); `/claudenews:list rmfeed r/<sub>` removes it. The
+  command writes this for you, and you can also edit it by hand:
 
   ```json
   "clientFeeds": [

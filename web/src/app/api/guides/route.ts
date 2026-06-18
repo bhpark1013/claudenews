@@ -17,7 +17,7 @@ const DEFAULTS: string[] = [
   "/claudenews:list to see & pick news sources",
   "/claudenews:translate ko to set language",
   "/claudenews:feedback <msg> to send feedback",
-  "add your own RSS/Reddit feeds in ~/.claudenews/config.json",
+  "ask Claude to add r/<sub> as a feed",
 ];
 
 const MAX_GUIDES = 20;
