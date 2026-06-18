@@ -69,6 +69,20 @@ hammerspoon_installed() {
   [ -d "/Applications/Hammerspoon.app" ] || command -v hs >/dev/null 2>&1
 }
 
+# Reliably (re)load init.lua so the key tap reflects the current wiring. We
+# RESTART the app rather than `open hammerspoon://reload` (a no-op unless the
+# user bound that URL handler) or AppleScript (off by default). A fresh launch
+# always re-reads init.lua, so the user never has to reload by hand. Bounded
+# spin-waits (no `sleep`) keep it portable.
+reload_hammerspoon() {
+  if pgrep -x Hammerspoon >/dev/null 2>&1; then
+    pkill -x Hammerspoon 2>/dev/null || true
+    n=0; while pgrep -x Hammerspoon >/dev/null 2>&1 && [ "$n" -lt 200 ]; do n=$((n + 1)); done
+  fi
+  open -g -a Hammerspoon 2>/dev/null || open -g /Applications/Hammerspoon.app 2>/dev/null || true
+  n=0; while ! pgrep -x Hammerspoon >/dev/null 2>&1 && [ "$n" -lt 200 ]; do n=$((n + 1)); done
+}
+
 case "$ACTION" in
   on)
     set_flag true
@@ -83,18 +97,22 @@ case "$ACTION" in
     echo "  • Works in: iTerm2, Apple Terminal, WezTerm, kitty (others: key untouched)."
     echo ""
     if hammerspoon_installed; then
-      # Auto-reload so the key tap starts immediately — no manual step.
-      open -g hammerspoon://reload >/dev/null 2>&1 || true
-      echo "  ✅ Hammerspoon reloaded — the key tap is starting."
+      # Load the tap for the user — no manual reload needed.
+      reload_hammerspoon
+      if pgrep -x Hammerspoon >/dev/null 2>&1; then
+        echo "  ✅ Hammerspoon (re)started — the key tap is now active."
+      else
+        echo "  ⚠️  Couldn't launch Hammerspoon automatically. Open it once:  open -a Hammerspoon"
+      fi
       echo ""
-      echo "  First time only: macOS will ask to allow Accessibility. Click"
-      echo "  \"Open System Settings\" and toggle Hammerspoon ON. If no prompt appears:"
+      echo "  The only manual step: if macOS pops an Accessibility prompt for"
+      echo "  Hammerspoon, click \"Open System Settings\" and toggle it ON."
+      echo "  No prompt and keys don't work? Enable it by hand, then rerun nav on:"
       echo "      open \"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility\""
     else
-      echo "  ⚠️  Hammerspoon is NOT installed — it captures the key. Install + grant permission:"
+      echo "  ⚠️  Hammerspoon is NOT installed — it captures the key. Install it, then"
+      echo "  rerun /claudenews:nav on (it launches Hammerspoon and loads the tap):"
       echo "      brew install --cask hammerspoon"
-      echo "      open -a Hammerspoon          # then System Settings → Privacy → Accessibility → enable Hammerspoon"
-      echo "      open -g hammerspoon://reload  # after enabling"
     fi
     echo ""
     echo "  Wired into: $HS_INIT"
@@ -105,7 +123,10 @@ case "$ACTION" in
     manage_init remove
     rm -f "$NAV_LAUNCHER" "$LUA_DST"
     echo "✅ claudenews key navigation DISABLED. Per-session rotation resumes."
-    echo "  Reload Hammerspoon to drop the key tap:  open -g hammerspoon://reload"
+    if hammerspoon_installed; then
+      reload_hammerspoon
+      echo "  Hammerspoon reloaded — the key tap is removed."
+    fi
     ;;
   status)
     ENABLED=$(python3 -c "import json;print(json.load(open('$CONFIG_FILE')).get('navEnabled',False))" 2>/dev/null || echo "False")
