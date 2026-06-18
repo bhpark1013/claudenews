@@ -301,9 +301,9 @@ if (existsSync(newsFilePath)) {
         // can actually drive (never advertise a feature that can't work here)
         // and only while nav is still off; once on, show the shortcut instead.
         if (navEnabled) {
-          pool = ["ctrl+←/→ to browse news", ...pool];
+          pool = ["ctrl+shift+←/→ to browse news", ...pool];
         } else if (terminalSupportsNav()) {
-          pool = ["/claudenews:nav on — browse news with ctrl+←/→", ...pool];
+          pool = ["/claudenews:nav on — browse news with ctrl+shift+←/→", ...pool];
         }
         const guide =
           pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];

@@ -29,7 +29,7 @@ SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
 GUIDES_CACHE = os.path.join(CONFIG_DIR, ".guides-cache.json")
 RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
 # Opt-in key-driven navigation (config.navEnabled). An ordered candidate list
-# + a global cursor let cmd+ctrl+←/→ step prev/next; a short pin keeps a manual
+# + a global cursor let ctrl+shift+←/→ step prev/next; a short pin keeps a manual
 # pick from being clobbered by auto-rotation.
 NEWS_LIST_FILE = os.path.join(CONFIG_DIR, ".news-list.json")
 NAV_STATE_FILE = os.path.join(CONFIG_DIR, ".nav-state.json")
@@ -830,7 +830,7 @@ def main():
         api_url = config.get("apiUrl", DEFAULT_API)
 
     # Opt-in key navigation makes news GLOBAL: every session reads the shared
-    # .current-news so cmd+ctrl+←/→ moves all panes together. When off, the
+    # .current-news so ctrl+shift+←/→ moves all panes together. When off, the
     # per-session rotation below is left exactly as it was.
     global_mode = nav_enabled(config)
     if global_mode:
@@ -1003,7 +1003,7 @@ def main():
             pass
 
     # Keep the nav cursor pointed at whatever auto-rotation just chose, so the
-    # next cmd+ctrl+→ steps forward from here. Unpinned (pinnedUntil=0).
+    # next ctrl+shift+→ steps forward from here. Unpinned (pinnedUntil=0).
     if global_mode and saved_list is not None:
         try:
             idx = next(i for i, it in enumerate(saved_list) if it.get("url") == url)

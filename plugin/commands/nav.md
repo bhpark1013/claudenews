@@ -1,12 +1,12 @@
 ---
-description: Enable or disable claudenews key navigation — step the status-line news to the previous/next item with cmd+ctrl+←/→. Opt-in; installs a small Hammerspoon key tap only when turned on. Triggers when the user wants to browse/scroll news with arrow keys, e.g. "claudenews 키로 뉴스 넘기기 켜줘", "방향키로 뉴스 이동 활성화", "enable claudenews key nav", "turn off news arrow keys".
+description: Enable or disable claudenews key navigation — step the status-line news to the previous/next item with ctrl+shift+←/→. Opt-in; installs a small Hammerspoon key tap only when turned on. Triggers when the user wants to browse/scroll news with arrow keys, e.g. "claudenews 키로 뉴스 넘기기 켜줘", "방향키로 뉴스 이동 활성화", "enable claudenews key nav", "turn off news arrow keys".
 argument-hint: "[on | off | status]"
 allowed-tools: Bash(bash:*)
 ---
 
 Enable, disable, or check claudenews key navigation.
 
-- `/claudenews:nav on` — make news global + install the Hammerspoon key tap (cmd+ctrl+←/→)
+- `/claudenews:nav on` — make news global + install the Hammerspoon key tap (ctrl+shift+←/→)
 - `/claudenews:nav off` — disable and remove the wiring (per-session rotation resumes)
 - `/claudenews:nav status` — show current state
 

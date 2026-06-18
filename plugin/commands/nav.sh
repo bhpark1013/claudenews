@@ -1,5 +1,5 @@
 #!/bin/bash
-# Enable/disable claudenews key navigation (cmd+ctrl+←/→ to step news).
+# Enable/disable claudenews key navigation (ctrl+shift+←/→ to step news).
 # Usage: nav.sh [on|off|status]
 #
 # Only when ON does the feature install anything: a stable nav launcher and a
@@ -79,13 +79,17 @@ case "$ACTION" in
     echo "✅ claudenews key navigation ENABLED."
     echo ""
     echo "  • News is now GLOBAL: every Claude Code session shows the same item."
-    echo "  • Key: ctrl+←  (previous)   ctrl+→  (next)"
+    echo "  • Key: ctrl+shift+←  (previous)   ctrl+shift+→  (next)"
     echo "  • Works in: iTerm2, Apple Terminal, WezTerm, kitty (others: key untouched)."
     echo ""
     if hammerspoon_installed; then
-      echo "  Hammerspoon detected. Reload its config to start the key tap:"
-      echo "      open -g hammerspoon://reload      (or click the menubar icon → Reload Config)"
-      echo "  First run will ask for Accessibility permission — grant it."
+      # Auto-reload so the key tap starts immediately — no manual step.
+      open -g hammerspoon://reload >/dev/null 2>&1 || true
+      echo "  ✅ Hammerspoon reloaded — the key tap is starting."
+      echo ""
+      echo "  First time only: macOS will ask to allow Accessibility. Click"
+      echo "  \"Open System Settings\" and toggle Hammerspoon ON. If no prompt appears:"
+      echo "      open \"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility\""
     else
       echo "  ⚠️  Hammerspoon is NOT installed — it captures the key. Install + grant permission:"
       echo "      brew install --cask hammerspoon"
