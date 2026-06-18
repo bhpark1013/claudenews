@@ -72,9 +72,9 @@ let sourcesConfigured = false;
 let navEnabled = false;
 // Summary line color (SGR params). Default to a readable light gray instead of
 // the faint/dim attribute (\x1b[2m), which many terminals render too low-contrast
-// to read. Override via config "summaryColor" (e.g. "37" plain white, "38;5;245"
-// dimmer gray, "38;5;252" brighter). Validated to digits/semicolons only.
-let summaryColor = "38;5;250";
+// to read. Override via config "summaryColor" (e.g. "37" plain white, "38;5;250"
+// lighter gray, "38;5;252" brighter). Validated to digits/semicolons only.
+let summaryColor = "38;5;245";
 if (existsSync(CONFIG_FILE)) {
   try {
     const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
