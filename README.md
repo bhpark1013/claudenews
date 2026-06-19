@@ -73,8 +73,38 @@ the right command runs automatically.
 | `/claudenews:translate ko` | Force a target language (`ko`, `ja`, `zh`, `es`, …) |
 | `/claudenews:translate off` | Disable translation |
 | `/claudenews:list` | Show every source inline; toggle one or more by id (`/claudenews:list cnn bbc hn`) |
+| `/claudenews:nav on` | Browse news with `ctrl+shift+←/→` (macOS; installs a Hammerspoon key tap) |
+| `/claudenews:nav off` | Turn key navigation back off (per-session auto-rotation resumes) |
 | `/claudenews:feedback` | Send feedback / a bug report / a feature request to the maintainer |
 | `/claudenews:teardown` | Remove status line wiring (run before `/plugin remove`) |
+
+## Keyboard navigation (optional, macOS)
+
+By default the status line auto-rotates through news while the agent thinks.
+If you'd rather step through items yourself, turn on key navigation:
+
+```
+/claudenews:nav on
+```
+
+- **`ctrl+shift+→`** next · **`ctrl+shift+←`** previous
+- News becomes **global**: every Claude Code session shows the same item, so
+  stepping moves them all together.
+- Works in **iTerm2, Apple Terminal, WezTerm, kitty**. In any other app the
+  shortcut is left untouched (so it still selects text in your browser/editor).
+
+The key is captured by a tiny [Hammerspoon](https://www.hammerspoon.org) tap,
+so `nav on` needs Hammerspoon installed:
+
+```
+brew install --cask hammerspoon
+```
+
+The only manual step is a one-time macOS **Accessibility** grant for Hammerspoon
+— macOS pops the prompt the first time; click *Open System Settings* and toggle
+it on. `nav on` restarts Hammerspoon for you and sets the status-line refresh to
+1s so stepping feels instant. Disable it (and restore auto-rotation) anytime
+with `/claudenews:nav off`.
 
 ## Updating
 
@@ -114,6 +144,44 @@ The plugin picks sensible defaults on first run from your OS language.
 `/claudenews:list` prints the full menu; `/claudenews:list cnn bbc hn`
 toggles one or more by id. Public sources are fetched and cached by the
 backend; your selection just tells it what to merge.
+
+## Power-user config (`~/.claudenews/config.json`)
+
+A few optional knobs you can set by hand (the plugin manages the rest):
+
+- **`clientFeeds`** — add any RSS/Atom feed the backend can't reach, fetched
+  from your own machine instead. Reddit is the headline case: it 403s
+  datacenter IPs, but `www.reddit.com/r/<sub>/.rss` works from a normal
+  machine. Items flow through rotation / nav / translation / summary exactly
+  like built-in sources — there's no per-source code, just URLs.
+
+  Easiest way to add one: **`/claudenews:list add r/<sub>`** (or just ask
+  Claude — *"add r/rust"*); `/claudenews:list rmfeed r/<sub>` removes it. The
+  command writes this for you, and you can also edit it by hand:
+
+  ```json
+  "clientFeeds": [
+    {"name": "👽 r/ClaudeAI", "url": "https://www.reddit.com/r/ClaudeAI/.rss"},
+    {"name": "🐘 #rust", "url": "https://mastodon.social/tags/rust.rss", "lang": "en"}
+  ]
+  ```
+
+- **`navKeys`** — remap the keyboard-nav combo (default `ctrl+shift+←/→`). Set
+  the modifiers and the prev/next keys, then rerun `/claudenews:nav on` to apply:
+
+  ```json
+  "navKeys": { "modifiers": ["ctrl", "shift"], "prev": "left", "next": "right" }
+  ```
+
+  `modifiers` is any of `ctrl`/`shift`/`cmd`/`alt` (held together); `prev`/`next`
+  are any key names (`left`, `right`, `[`, `]`, …). Keep to a combo the shell
+  doesn't use (the `ctrl+shift` family) — picking one it does (e.g. `cmd`/`alt`
+  +arrow) means losing that shortcut inside the terminal.
+- **`summaryColor`** — SGR color for the summary lines (default `38;5;245`, a
+  readable gray). e.g. `"37"` plain white, `"38;5;250"` lighter, `"38;5;240"`
+  dimmer.
+- **`parentStatusLine`** — the status line claudenews chains underneath; set
+  automatically at setup from whatever you had before.
 
 ## Privacy
 

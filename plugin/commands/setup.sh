@@ -63,7 +63,9 @@ else:
     settings["statusLine"] = {
         "type": "command",
         "command": f"node {hud}",
-        "refreshInterval": 2,
+        # 1s is the floor Claude Code honors (fractional values are unsupported);
+        # nav data updates in ~70ms, so this keeps the visible step latency ~<1s.
+        "refreshInterval": 1,
     }
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)

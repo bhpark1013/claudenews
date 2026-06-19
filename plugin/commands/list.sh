@@ -2,6 +2,8 @@
 # News-source management (explicit, no windows).
 #   list.sh                 -> inline list of every source with on/off state
 #   list.sh <id> [<id>...]  -> toggle one or more sources by id
+#   list.sh add r/<sub>     -> add your own feed (subreddit, or any RSS/Atom URL)
+#   list.sh rmfeed <match>  -> remove one of your own feeds
 #
 # The inline list is the menu: it shows every source id + flag + on/off,
 # so you see exactly what you can pick and how. Toggle by id explicitly.
@@ -138,11 +140,118 @@ if known:
 PY
 }
 
-# No args (or explicit text/list) -> show the full inline menu.
-if [ "$#" -eq 0 ] || [ "$1" = "text" ] || [ "$1" = "list" ]; then
-  print_text_list
-  exit 0
-fi
+# A client feed is any RSS/Atom URL fetched on THIS machine (for feeds the
+# backend can't reach, e.g. Reddit). Stored in config.json under clientFeeds.
+add_feed() {
+  python3 - "$CONFIG_FILE" "$@" <<'PY'
+import json, sys
+cfg_path = sys.argv[1]
+arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+name_override = " ".join(sys.argv[3:]).strip()
+try:
+    cfg = json.load(open(cfg_path))
+    if not isinstance(cfg, dict): cfg = {}
+except Exception:
+    cfg = {}
+low = arg.lower()
+url = name = None
+if low.startswith("r/") or low.startswith("/r/"):
+    sub = arg.split("r/", 1)[1].strip("/")
+    if sub:
+        url = "https://www.reddit.com/r/%s/.rss" % sub
+        name = name_override or ("\U0001F47D r/%s" % sub)
+elif low.startswith("http://") or low.startswith("https://"):
+    url = arg
+    name = name_override or arg.split("//", 1)[1].split("/")[0]
+if not url:
+    print("  Usage: /claudenews:list add r/<subreddit>   (or a full RSS/Atom URL)")
+    print("  e.g.   /claudenews:list add r/rust")
+    sys.exit(0)
+feeds = cfg.get("clientFeeds")
+if not isinstance(feeds, list): feeds = []
+if any(isinstance(f, dict) and f.get("url") == url for f in feeds):
+    print("  already added: %s" % url); sys.exit(0)
+feeds.append({"name": name, "url": url})
+cfg["clientFeeds"] = feeds
+with open(cfg_path, "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False); f.write("\n")
+print("  added your feed: %s" % name)
+print("    %s" % url)
+PY
+}
 
-# One or more ids -> toggle each.
-toggle_ids "$@"
+remove_feed() {
+  python3 - "$CONFIG_FILE" "$@" <<'PY'
+import json, sys
+cfg_path = sys.argv[1]
+arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lower()
+try:
+    cfg = json.load(open(cfg_path))
+except Exception:
+    cfg = {}
+feeds = (cfg or {}).get("clientFeeds")
+if not isinstance(feeds, list) or not feeds:
+    print("  you have no client feeds"); sys.exit(0)
+if arg.startswith("r/") or arg.startswith("/r/"):
+    arg = "reddit.com/r/%s/" % arg.split("r/", 1)[1].strip("/")
+if not arg:
+    print("  Usage: /claudenews:list rmfeed <r/sub | url-fragment | name>"); sys.exit(0)
+kept = [f for f in feeds if not (isinstance(f, dict) and
+        (arg in (f.get("url", "").lower()) or arg in (f.get("name", "").lower())))]
+n = len(feeds) - len(kept)
+if not n:
+    print("  no feed matched: %s" % arg); sys.exit(0)
+cfg["clientFeeds"] = kept
+with open(cfg_path, "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False); f.write("\n")
+print("  removed %d feed(s) matching '%s'" % (n, arg))
+PY
+}
+
+print_client_feeds() {
+  python3 - "$CONFIG_FILE" <<'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    cfg = {}
+feeds = (cfg or {}).get("clientFeeds") or []
+if isinstance(feeds, list) and feeds:
+    print("  Your own feeds (fetched on this machine):")
+    for f in feeds:
+        if isinstance(f, dict):
+            print("     - %s  %s" % (f.get("name", ""), f.get("url", "")))
+print("  Add your own:  /claudenews:list add r/<subreddit>   (or any RSS URL)")
+PY
+}
+
+# Best-effort: warm a freshly added feed so it shows promptly (no-op offline).
+warm_feeds() {
+  [ -n "$CLAUDE_PLUGIN_ROOT" ] && [ -f "$CLAUDE_PLUGIN_ROOT/hooks/show-news.py" ] || return 0
+  local py=python3 c
+  for c in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    [ -x "$c" ] && py="$c" && break
+  done
+  ( "$py" "$CLAUDE_PLUGIN_ROOT/hooks/show-news.py" --feeds-refresh >/dev/null 2>&1 & ) || true
+}
+
+# Dispatch.
+case "${1:-}" in
+  ""|text|list)
+    print_text_list
+    print_client_feeds
+    ;;
+  add)
+    shift
+    add_feed "$@"
+    warm_feeds
+    ;;
+  rmfeed|remove-feed)
+    shift
+    remove_feed "$@"
+    ;;
+  *)
+    # One or more ids -> toggle each.
+    toggle_ids "$@"
+    ;;
+esac

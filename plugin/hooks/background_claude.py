@@ -97,6 +97,23 @@ def build_background_env() -> dict[str, str]:
     return env
 
 
+_EMPTY_MCP_FILE = os.path.join(CONFIG_DIR, ".empty-mcp.json")
+
+
+def _empty_mcp_config_file() -> str:
+    """Path to a tiny MCP config declaring zero servers. Used with
+    --strict-mcp-config so background `claude --print` calls skip loading the
+    user's MCP servers entirely. Written once; recreated if missing."""
+    try:
+        if not os.path.exists(_EMPTY_MCP_FILE):
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(_EMPTY_MCP_FILE, "w", encoding="utf-8") as f:
+                f.write('{"mcpServers":{}}')
+    except OSError:
+        pass
+    return _EMPTY_MCP_FILE
+
+
 def build_claude_command(
     prompt: str,
     *,
@@ -105,6 +122,13 @@ def build_claude_command(
     settings_path: str = CLAUDE_SETTINGS_FILE,
 ) -> list[str]:
     model = resolve_background_model(task_name, config=config)
+    # Disable MCP servers for background calls. The user's MCP servers (remote
+    # mcp-remote endpoints, npx-spawned figma/redis/etc.) add 2–12s of cold
+    # start to EVERY `claude --print`, dwarfing the (fast) Haiku translation
+    # itself. --strict-mcp-config + an empty --mcp-config loads none of them,
+    # cutting a translation from ~5–15s to ~3s. The prompt goes on stdin (see
+    # run_background_prompt), never as a positional arg, so the variadic
+    # --mcp-config can't swallow it.
     command = [
         "claude",
         "--print",
@@ -114,6 +138,9 @@ def build_claude_command(
         "",
         "--disable-slash-commands",
         "--no-session-persistence",
+        "--strict-mcp-config",
+        "--mcp-config",
+        _empty_mcp_config_file(),
     ]
 
     overrides = build_plugin_disable_overrides(settings_path=settings_path)
@@ -122,7 +149,6 @@ def build_claude_command(
             ["--settings", json.dumps(overrides, ensure_ascii=False, separators=(",", ":"))]
         )
 
-    command.append(prompt)
     return command
 
 
@@ -136,6 +162,7 @@ def run_background_prompt(
     os.makedirs(CONFIG_DIR, exist_ok=True)
     return subprocess.run(
         build_claude_command(prompt, task_name=task_name, config=config),
+        input=prompt,  # prompt on stdin, not argv (see build_claude_command)
         capture_output=True,
         text=True,
         encoding="utf-8",
