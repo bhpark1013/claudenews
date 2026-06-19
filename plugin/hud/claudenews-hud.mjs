@@ -29,15 +29,29 @@ const GUIDES_CACHE = join(HOME, ".claudenews/.guides-cache.json");
 // so the label tracks updates without editing this file every release.
 function detectVersion() {
   try {
-    const dir = join(HOME, ".claude/plugins/cache/claudenews/claudenews");
-    const vers = readdirSync(dir).filter((v) => /^\d+\.\d+\.\d+/.test(v));
-    if (!vers.length) return "";
-    vers.sort((a, b) => {
-      const pa = a.split(".").map(Number);
-      const pb = b.split(".").map(Number);
-      return pb[0] - pa[0] || pb[1] - pa[1] || pb[2] - pa[2];
-    });
-    return vers[0];
+    // Marketplace-agnostic: scan cache/<marketplace>/claudenews/<ver> and take
+    // the newest across ALL marketplaces (matches the launcher), so a stale
+    // install under a different marketplace name can't pin the label to an old
+    // version.
+    const cacheRoot = join(HOME, ".claude/plugins/cache");
+    const cmp = (a, b) => {
+      const A = a.split(".").map(Number);
+      const B = b.split(".").map(Number);
+      return B[0] - A[0] || B[1] - A[1] || B[2] - A[2];
+    };
+    let best = "";
+    for (const mp of readdirSync(cacheRoot)) {
+      let vers;
+      try {
+        vers = readdirSync(join(cacheRoot, mp, "claudenews")).filter((v) =>
+          /^\d+\.\d+\.\d+/.test(v)
+        );
+      } catch {
+        continue;
+      }
+      for (const v of vers) if (!best || cmp(v, best) < 0) best = v;
+    }
+    return best;
   } catch {
     return "";
   }
