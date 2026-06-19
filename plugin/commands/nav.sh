@@ -39,6 +39,35 @@ open(path, "a").write("\n")
 PY
 }
 
+# Human-readable key combo, honoring config.json -> navKeys (default ctrl+shift+←/→).
+# Mirrors the binding in claudenews-nav.lua and the hint in the HUD.
+nav_key_desc() {
+  python3 - "$CONFIG_FILE" <<'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+    if not isinstance(cfg, dict): cfg = {}
+except Exception:
+    cfg = {}
+nk = cfg.get("navKeys")
+alias = {"control": "ctrl", "command": "cmd", "option": "alt", "opt": "alt"}
+order = ["ctrl", "shift", "alt", "cmd"]
+sym = {"left": "←", "right": "→", "up": "↑", "down": "↓"}
+mods, prev, nxt = ["ctrl", "shift"], "left", "right"
+if isinstance(nk, dict):
+    have = set()
+    for m in (nk.get("modifiers") or []):
+        k = str(m).lower(); k = alias.get(k, k)
+        if k in order: have.add(k)
+    if have:
+        mods = [m for m in order if m in have]
+    if isinstance(nk.get("prev"), str): prev = nk["prev"].lower()
+    if isinstance(nk.get("next"), str): nxt = nk["next"].lower()
+m = "+".join(mods)
+print("%s+%s  (previous)   %s+%s  (next)" % (m, sym.get(prev, prev), m, sym.get(nxt, nxt)))
+PY
+}
+
 # Idempotently add/remove the dofile block in ~/.hammerspoon/init.lua.
 manage_init() { # $1 = add|remove
   python3 - "$HS_INIT" "$LUA_DST" "$1" <<'PY'
@@ -117,8 +146,10 @@ case "$ACTION" in
     echo "✅ claudenews key navigation ENABLED."
     echo ""
     echo "  • News is now GLOBAL: every Claude Code session shows the same item."
-    echo "  • Key: ctrl+shift+←  (previous)   ctrl+shift+→  (next)"
+    echo "  • Key: $(nav_key_desc)"
     echo "  • Works in: iTerm2, Apple Terminal, WezTerm, kitty (others: key untouched)."
+    echo "  • Change the keys: set \"navKeys\" in ~/.claudenews/config.json, then rerun nav on"
+    echo "      e.g.  \"navKeys\": { \"modifiers\": [\"ctrl\",\"shift\"], \"prev\": \"left\", \"next\": \"right\" }"
     echo ""
     if hammerspoon_installed; then
       # Load the tap for the user — no manual reload needed.
@@ -156,6 +187,7 @@ case "$ACTION" in
   status)
     ENABLED=$(python3 -c "import json;print(json.load(open('$CONFIG_FILE')).get('navEnabled',False))" 2>/dev/null || echo "False")
     echo "claudenews key navigation: $([ "$ENABLED" = "True" ] && echo ON || echo OFF)"
+    echo "  key combo    : $(nav_key_desc)"
     echo "  nav launcher : $([ -x "$NAV_LAUNCHER" ] && echo "installed ($NAV_LAUNCHER)" || echo "not installed")"
     echo "  hammerspoon  : $(hammerspoon_installed && echo "installed" || echo "NOT installed")"
     echo "  init.lua wire: $([ -f "$HS_INIT" ] && grep -q 'claudenews-nav' "$HS_INIT" && echo "present" || echo "absent")"

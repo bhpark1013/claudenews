@@ -85,6 +85,9 @@ let maxCols = 120; // safe default — Claude Code's statusline doesn't pass wid
 let userOverrodeMaxCols = false;
 let sourcesConfigured = false;
 let navEnabled = false;
+// Human-readable nav key combo shown in the rotating hint. Mirrors the binding
+// in claudenews-nav.lua (config.json -> navKeys); defaults to ctrl+shift+←/→.
+let navCombo = "ctrl+shift+←/→";
 // Summary line color (SGR params). Default to a readable light gray instead of
 // the faint/dim attribute (\x1b[2m), which many terminals render too low-contrast
 // to read. Override via config "summaryColor" (e.g. "37" plain white, "38;5;250"
@@ -95,6 +98,7 @@ if (existsSync(CONFIG_FILE)) {
     const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
     sourcesConfigured = cfg.sourcesConfigured === true;
     navEnabled = cfg.navEnabled === true;
+    navCombo = formatNavCombo(cfg.navKeys);
     if (typeof cfg.summaryColor === "string" && /^[0-9;]+$/.test(cfg.summaryColor)) {
       summaryColor = cfg.summaryColor;
     }
@@ -414,9 +418,9 @@ if (existsSync(newsFilePath)) {
         // can actually drive (never advertise a feature that can't work here)
         // and only while nav is still off; once on, show the shortcut instead.
         if (navEnabled) {
-          pool = ["ctrl+shift+←/→ to browse news", ...pool];
+          pool = [`${navCombo} to browse news`, ...pool];
         } else if (terminalSupportsNav()) {
-          pool = ["/claudenews:nav on — browse news with ctrl+shift+←/→", ...pool];
+          pool = [`/claudenews:nav on — browse news with ${navCombo}`, ...pool];
         }
         const guide =
           pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];
@@ -529,6 +533,31 @@ function visibleCols(line) {
   let c = 0;
   for (const ch of visible) c += charCols(ch.codePointAt(0));
   return c;
+}
+
+// Format the configured nav key combo (config.json -> navKeys) into the hint
+// string, mirroring the binding in claudenews-nav.lua. Falls back to the default
+// ctrl+shift+←/→ for any missing/invalid field.
+function formatNavCombo(nk) {
+  const DEF = "ctrl+shift+←/→";
+  if (!nk || typeof nk !== "object") return DEF;
+  const alias = { control: "ctrl", command: "cmd", option: "alt", opt: "alt" };
+  const order = ["ctrl", "shift", "alt", "cmd"]; // ctrl+shift first → matches DEF
+  const have = new Set();
+  if (Array.isArray(nk.modifiers)) {
+    for (const m of nk.modifiers) {
+      const k = String(m).toLowerCase();
+      const norm = alias[k] || k;
+      if (order.includes(norm)) have.add(norm);
+    }
+  }
+  const mods = order.filter((m) => have.has(m));
+  if (!mods.length) return DEF; // empty/invalid mods → bare arrows are never bound
+  const sym = (name, fallback) => {
+    const k = typeof name === "string" ? name.toLowerCase() : "";
+    return { left: "←", right: "→", up: "↑", down: "↓" }[k] || k || fallback;
+  };
+  return `${mods.join("+")}+${sym(nk.prev, "←")}/${sym(nk.next, "→")}`;
 }
 
 // Best-effort: is this a terminal whose focused pane's tty the Hammerspoon nav

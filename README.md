@@ -166,6 +166,17 @@ A few optional knobs you can set by hand (the plugin manages the rest):
   ]
   ```
 
+- **`navKeys`** — remap the keyboard-nav combo (default `ctrl+shift+←/→`). Set
+  the modifiers and the prev/next keys, then rerun `/claudenews:nav on` to apply:
+
+  ```json
+  "navKeys": { "modifiers": ["ctrl", "shift"], "prev": "left", "next": "right" }
+  ```
+
+  `modifiers` is any of `ctrl`/`shift`/`cmd`/`alt` (held together); `prev`/`next`
+  are any key names (`left`, `right`, `[`, `]`, …). Keep to a combo the shell
+  doesn't use (the `ctrl+shift` family) — picking one it does (e.g. `cmd`/`alt`
+  +arrow) means losing that shortcut inside the terminal.
 - **`summaryColor`** — SGR color for the summary lines (default `38;5;245`, a
   readable gray). e.g. `"37"` plain white, `"38;5;250"` lighter, `"38;5;240"`
   dimmer.
