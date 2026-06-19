@@ -120,6 +120,16 @@ if (!userOverrodeMaxCols) {
   }
 }
 
+// Reserve a small right margin so no rendered row ever reaches the full
+// terminal width. Claude Code's status-line renderer lays each row into a
+// fixed-width screen buffer and clips a row that fills the last column —
+// replacing the final glyph with "…". That looked like a stray ellipsis
+// mid-summary (e.g. "효율적으…" with the real next line below). Keeping every
+// line strictly narrower than the detected width avoids it, and also absorbs
+// the ±1 col our width count can differ from CC's for an ambiguous-width glyph
+// like the "↳" summary marker.
+maxCols = Math.max(20, maxCols - 2);
+
 // Cache the detected width so the (possibly expensive, e.g. iTerm AppleScript)
 // probe runs at most once per TTL instead of on EVERY status-line render. This
 // lets refreshInterval go low without paying osascript each frame; a terminal
