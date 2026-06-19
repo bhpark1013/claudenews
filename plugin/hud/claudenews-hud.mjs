@@ -232,6 +232,38 @@ function ttyCols(dev) {
   return null;
 }
 
+// Background agents (Claude Code's daemon-spawned sessions, e.g. when attached
+// via `claude agents`) have no controlling tty and no TERM_PROGRAM/
+// ITERM_SESSION_ID — so neither the tty walk nor the per-terminal probes can
+// see the display width. But Claude Code launches each agent's pty-host with
+// the display terminal's size baked into argv:
+//   claude --bg-pty-host <sock> <cols> <rows> -- ...
+// Recover <cols> from the nearest such ancestor. (Set at attach time; a later
+// resize isn't reflected until the agent is re-attached — still far better than
+// the static fallback.)
+function backgroundAgentCols() {
+  let pid = process.ppid;
+  for (let i = 0; i < 8 && pid > 1; i++) {
+    try {
+      const r = spawnSync("ps", ["-o", "ppid=", "-o", "command=", "-p", String(pid)], {
+        encoding: "utf-8",
+        timeout: 300,
+      });
+      const m = (r.stdout || "").trim().match(/^(\d+)\s+(.*)$/);
+      if (!m) break;
+      const dims = m[2].match(/--bg-pty-host\s+\S+\s+(\d+)\s+(\d+)/);
+      if (dims) {
+        const c = parseInt(dims[1], 10);
+        if (Number.isFinite(c) && c > 20) return c;
+      }
+      pid = parseInt(m[1], 10) || 0;
+    } catch {
+      break;
+    }
+  }
+  return null;
+}
+
 function detectTerminalCols() {
   if (process.env.CMUX_SOCKET && process.env.CMUX_WORKSPACE_ID) {
     try {
@@ -256,6 +288,10 @@ function detectTerminalCols() {
     const c = ttyCols(ttyDev);
     if (c) return c;
   }
+  // No controlling tty (background/daemon agent): recover the display width
+  // from the pty-host argv.
+  const bgCols = backgroundAgentCols();
+  if (bgCols) return bgCols;
   // Only query tmux when actually running inside one — otherwise tmux would
   // report some unrelated session's width.
   if (process.env.TMUX) {
