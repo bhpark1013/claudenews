@@ -88,6 +88,9 @@ If you'd rather step through items yourself, turn on key navigation:
 ```
 
 - **`ctrl+shift+→`** next · **`ctrl+shift+←`** previous
+- **Remap the keys:** set `navKeys` in `~/.claudenews/config.json` (any
+  `ctrl`/`shift`/`cmd`/`alt` combo + prev/next keys), then rerun
+  `/claudenews:nav on` — see **Power-user config** below.
 - News becomes **global**: every Claude Code session shows the same item, so
   stepping moves them all together.
 - Works in **iTerm2, Apple Terminal, WezTerm, kitty**. In any other app the
