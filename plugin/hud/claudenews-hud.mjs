@@ -189,6 +189,49 @@ function cachedParentOutput(parentCmd) {
   return out;
 }
 
+// Resolve the controlling terminal of the Claude Code process that spawned this
+// status line. The status-line child itself usually has no controlling TTY, but
+// its parent (Claude Code) does — walk up a few ancestors until one is attached
+// to a real terminal device. Returns "/dev/ttysNNN" (or "/dev/pts/N") or null.
+function controllingTtyDevice() {
+  let pid = process.ppid;
+  for (let depth = 0; depth < 6 && pid > 1; depth++) {
+    try {
+      const r = spawnSync("ps", ["-o", "tty=", "-o", "ppid=", "-p", String(pid)], {
+        encoding: "utf-8",
+        timeout: 300,
+      });
+      const parts = (r.stdout || "").trim().split(/\s+/);
+      const tty = parts[0] || "";
+      const ppid = parseInt(parts[1], 10);
+      if (/^(tty|pts)/.test(tty)) return "/dev/" + tty;
+      pid = Number.isFinite(ppid) ? ppid : 0;
+    } catch {
+      break;
+    }
+  }
+  return null;
+}
+
+// Read the live window size straight from a tty device. This is the kernel's
+// TIOCGWINSZ — the exact column count the terminal renders to — so it's accurate
+// for every terminal (iTerm2, Terminal.app, WezTerm, kitty, Ghostty, Alacritty,
+// VS Code) and for tmux panes, and never goes stale the way matching on
+// ITERM_SESSION_ID can (that env var survives session restoration while the
+// session's identity changes underneath it).
+function ttyCols(dev) {
+  if (!/^\/dev\/[A-Za-z0-9/]+$/.test(dev)) return null;
+  try {
+    const r = spawnSync("sh", ["-c", `stty size < ${dev} 2>/dev/null`], {
+      encoding: "utf-8",
+      timeout: 300,
+    });
+    const n = parseInt((r.stdout || "").trim().split(/\s+/)[1], 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch {}
+  return null;
+}
+
 function detectTerminalCols() {
   if (process.env.CMUX_SOCKET && process.env.CMUX_WORKSPACE_ID) {
     try {
@@ -203,6 +246,15 @@ function detectTerminalCols() {
         if (focused && typeof focused.columns === "number") return focused.columns;
       }
     } catch {}
+  }
+  // Primary for non-multiplexed terminals: read the real window size from the
+  // controlling tty of the Claude Code process that spawned us. Terminal-agnostic
+  // and immune to a stale ITERM_SESSION_ID, so it supersedes the per-terminal
+  // probes below (which remain as fallbacks for sandboxes where ps/stty fail).
+  const ttyDev = controllingTtyDevice();
+  if (ttyDev) {
+    const c = ttyCols(ttyDev);
+    if (c) return c;
   }
   // Only query tmux when actually running inside one — otherwise tmux would
   // report some unrelated session's width.
