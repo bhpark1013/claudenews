@@ -384,13 +384,24 @@ if (existsSync(newsFilePath)) {
     const raw = JSON.parse(readFileSync(newsFilePath, "utf-8"));
     const age = (Date.now() - raw.timestamp) / 1000;
     if (age < NEWS_TTL_SEC) {
-      const title = truncateCols(raw.title || "", maxCols);
       const source = raw.source || "";
       const url = raw.url || "";
       const scoreStr = raw.score ? ` \x1b[33m▲${raw.score}\x1b[0m` : "";
       const commentsStr = raw.comments
         ? ` \x1b[90m💬${raw.comments}\x1b[0m`
         : "";
+      // Truncate the title to what actually remains of line 1 after the
+      // label/source prefix and the score/comments suffix. Truncating to the
+      // full maxCols let long titles push the row past the terminal width, so
+      // the status line wrapped an extra line on long items and snapped back
+      // on short ones.
+      const fixedCols = visibleCols(
+        `${FEED_LABEL} ${source} │ ${scoreStr}${commentsStr}`
+      );
+      const title = truncateCols(
+        raw.title || "",
+        Math.max(16, maxCols - fixedCols)
+      );
 
       // Title is always an OSC 8 hyperlink so a click / ⌘-click opens the
       // article. Terminals without OSC 8 support just render the plain title
