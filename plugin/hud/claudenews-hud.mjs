@@ -113,14 +113,25 @@ if (existsSync(CONFIG_FILE)) {
   } catch {}
 }
 
-// Detect actual terminal column width. Claude Code doesn't pass terminal
-// dimensions to statusline commands, so we probe the surrounding
-// environment: cmux RPC → tmux display-message → stty via /dev/tty. Each
-// channel either works in its environment or fails fast.
+// Detect actual terminal column width. Claude Code v2.1.153+ exports the live
+// terminal size as COLUMNS/LINES before running the statusline command —
+// exact, free, per-render, and per-PANE. Use it directly and skip the probe
+// cache entirely: one session can be shown in panes of different widths at
+// once (e.g. a second attached view), and the per-session cache lets one
+// pane's probe clobber the other's, re-wrapping the summary to a different
+// line count every few renders (the status bar visibly flickered between N
+// and N+1 lines). Older clients don't set COLUMNS, so fall back to probing
+// the environment (cmux RPC → controlling tty → bg pty-host argv → tmux →
+// iTerm2 → stty), cached with a short TTL because probes are slow.
 if (!userOverrodeMaxCols) {
-  const detected = detectTerminalColsCached();
-  if (detected && detected > 20) {
-    maxCols = detected;
+  const envCols = parseInt(process.env.COLUMNS || "", 10);
+  if (Number.isFinite(envCols) && envCols > 20) {
+    maxCols = envCols;
+  } else {
+    const detected = detectTerminalColsCached();
+    if (detected && detected > 20) {
+      maxCols = detected;
+    }
   }
 }
 
