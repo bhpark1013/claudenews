@@ -34,7 +34,8 @@ except Exception: catalog = []
 if not catalog:
     try:
         with urllib.request.urlopen(api + "/api/sources", timeout=4) as r:
-            catalog = (json.loads(r.read()) or {}).get("sources") or []
+            d = json.loads(r.read()) or {}
+            catalog = (d.get("sources") or []) + (d.get("customFeeds") or [])
         if catalog: json.dump(catalog, open(cache_path, "w"))
     except Exception: catalog = []
 if not catalog:
@@ -63,10 +64,23 @@ if not isinstance(sel, dict) or not sel:
         if not on and lang in (s.get("defaultOnLangs") or []): on = True
         sel[s["id"]] = on
 print("  News sources  —  toggle with: /claudenews:list <id> [<id>...]")
-for s in catalog:
+builtin = [s for s in catalog if not s.get("custom")]
+custom = [s for s in catalog if s.get("custom")]
+for s in builtin:
     i = s["id"]
     mark = "[x]" if sel.get(i) else "[ ]"
     print(f"   {mark} {i:10s} {s.get('name','')}")
+if custom:
+    on = [s for s in custom if sel.get(s["id"])]
+    off = [s for s in custom if not sel.get(s["id"])]
+    print("  Community feeds (registered by users, served by the backend):")
+    for s in on:
+        print(f"   [x] {s['id']:14s} {s.get('name','')}  {s.get('url','')}")
+    MAX_OFF = 12
+    for s in off[:MAX_OFF]:
+        print(f"   [ ] {s['id']:14s} {s.get('name','')}")
+    if len(off) > MAX_OFF:
+        print(f"       … {len(off) - MAX_OFF} more (see {api}/api/feeds)")
 print(f"  Config: {cfg_path}")
 PY
 }
@@ -90,7 +104,8 @@ except Exception: catalog = []
 if not catalog:
     try:
         with urllib.request.urlopen(api + "/api/sources", timeout=4) as r:
-            catalog = (json.loads(r.read()) or {}).get("sources") or []
+            d = json.loads(r.read()) or {}
+            catalog = (d.get("sources") or []) + (d.get("customFeeds") or [])
         if catalog: json.dump(catalog, open(cache_path, "w"))
     except Exception: catalog = []
 if not catalog:
@@ -140,19 +155,23 @@ if known:
 PY
 }
 
-# A client feed is any RSS/Atom URL fetched on THIS machine (for feeds the
-# backend can't reach, e.g. Reddit). Stored in config.json under clientFeeds.
+# Add your own feed: registered in the backend's shared registry (so it is
+# fetched server-side once for everyone and gets a public source id), then
+# enabled for this machine. Only if the backend cannot fetch the URL does it
+# fall back to a client feed (config.json clientFeeds, fetched locally).
 add_feed() {
-  python3 - "$CONFIG_FILE" "$@" <<'PY'
-import json, sys
-cfg_path = sys.argv[1]
-arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
-name_override = " ".join(sys.argv[3:]).strip()
+  python3 - "$CONFIG_FILE" "$SOURCES_CACHE" "$@" <<'PY'
+import json, sys, os, urllib.request, urllib.error
+cfg_path, cache_path = sys.argv[1], sys.argv[2]
+arg = (sys.argv[3] if len(sys.argv) > 3 else "").strip()
+name_override = " ".join(sys.argv[4:]).strip()
+DEFAULT_API = "https://web-olive-three-47.vercel.app"
 try:
     cfg = json.load(open(cfg_path))
     if not isinstance(cfg, dict): cfg = {}
 except Exception:
     cfg = {}
+api = cfg.get("apiUrl", DEFAULT_API)
 low = arg.lower()
 url = name = None
 if low.startswith("r/") or low.startswith("/r/"):
@@ -167,44 +186,104 @@ if not url:
     print("  Usage: /claudenews:list add r/<subreddit>   (or a full RSS/Atom URL)")
     print("  e.g.   /claudenews:list add r/rust")
     sys.exit(0)
+
+def save(c):
+    with open(cfg_path, "w") as f:
+        json.dump(c, f, indent=2, ensure_ascii=False); f.write("\n")
+
+feed, err, unreachable = None, None, False
+try:
+    body = json.dumps({"url": url, "name": name}).encode()
+    req = urllib.request.Request(api + "/api/feeds", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        d = json.loads(r.read()) or {}
+    feed = d.get("feed") if d.get("ok") else None
+    err = d.get("error")
+except urllib.error.HTTPError as e:
+    try: d = json.loads(e.read()) or {}
+    except Exception: d = {}
+    err = d.get("error") or ("http %s" % e.code)
+    unreachable = bool(d.get("unreachable"))
+except Exception as e:
+    err = "backend unreachable (%s)" % e
+
+if feed:
+    sel = cfg.get("sources") if isinstance(cfg.get("sources"), dict) else {}
+    sel[feed["id"]] = True
+    cfg["sources"] = sel
+    cfg["sourcesConfigured"] = True
+    # Drop a legacy client-side copy of the same feed, if any.
+    cf = [f for f in (cfg.get("clientFeeds") or []) if not (isinstance(f, dict) and f.get("url") == url)]
+    if cf: cfg["clientFeeds"] = cf
+    else: cfg.pop("clientFeeds", None)
+    save(cfg)
+    try: os.unlink(cache_path)   # refetch the catalog so the new id shows up
+    except Exception: pass
+    print("  %s your feed on the backend: %s" % ("registered" if d.get("created") else "enabled", feed.get("name")))
+    print("    id %s   %s" % (feed["id"], feed.get("url")))
+    print("  toggle later with: /claudenews:list %s" % feed["id"])
+    sys.exit(0)
+
+if not unreachable and not str(err).startswith("backend unreachable"):
+    print("  could not register feed: %s" % err)
+    sys.exit(0)
+
+# Backend can't fetch it (or is down): keep the old client-fetched path.
 feeds = cfg.get("clientFeeds")
 if not isinstance(feeds, list): feeds = []
 if any(isinstance(f, dict) and f.get("url") == url for f in feeds):
-    print("  already added: %s" % url); sys.exit(0)
+    print("  already added (client feed): %s" % url); sys.exit(0)
 feeds.append({"name": name, "url": url})
 cfg["clientFeeds"] = feeds
-with open(cfg_path, "w") as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False); f.write("\n")
-print("  added your feed: %s" % name)
+save(cfg)
+print("  backend could not fetch it (%s) — added as a client feed fetched on this machine: %s" % (err, name))
 print("    %s" % url)
 PY
 }
 
 remove_feed() {
-  python3 - "$CONFIG_FILE" "$@" <<'PY'
-import json, sys
-cfg_path = sys.argv[1]
-arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lower()
+  python3 - "$CONFIG_FILE" "$SOURCES_CACHE" "$@" <<'PY'
+import json, sys, os
+cfg_path, cache_path = sys.argv[1], sys.argv[2]
+arg = (sys.argv[3] if len(sys.argv) > 3 else "").strip().lower()
 try:
     cfg = json.load(open(cfg_path))
+    if not isinstance(cfg, dict): cfg = {}
 except Exception:
     cfg = {}
-feeds = (cfg or {}).get("clientFeeds")
-if not isinstance(feeds, list) or not feeds:
-    print("  you have no client feeds"); sys.exit(0)
 if arg.startswith("r/") or arg.startswith("/r/"):
     arg = "reddit.com/r/%s/" % arg.split("r/", 1)[1].strip("/")
 if not arg:
-    print("  Usage: /claudenews:list rmfeed <r/sub | url-fragment | name>"); sys.exit(0)
-kept = [f for f in feeds if not (isinstance(f, dict) and
-        (arg in (f.get("url", "").lower()) or arg in (f.get("name", "").lower())))]
-n = len(feeds) - len(kept)
-if not n:
+    print("  Usage: /claudenews:list rmfeed <r/sub | cf-id | url-fragment | name>"); sys.exit(0)
+try: catalog = json.load(open(cache_path)) if os.path.exists(cache_path) else []
+except Exception: catalog = []
+sel = cfg.get("sources") if isinstance(cfg.get("sources"), dict) else {}
+changed = 0
+# Community feeds are shared — "removing" one just turns it off for you.
+for s in catalog:
+    if not s.get("custom") or not sel.get(s["id"]): continue
+    hay = " ".join([s["id"], s.get("url", ""), s.get("name", "")]).lower()
+    if arg in hay:
+        sel[s["id"]] = False; changed += 1
+        print("  turned off: %s (%s)" % (s.get("name", ""), s["id"]))
+if changed:
+    cfg["sources"] = sel
+# Legacy client feeds are private to this machine — delete outright.
+feeds = cfg.get("clientFeeds")
+if isinstance(feeds, list) and feeds:
+    kept = [f for f in feeds if not (isinstance(f, dict) and
+            (arg in (f.get("url", "").lower()) or arg in (f.get("name", "").lower())))]
+    n = len(feeds) - len(kept)
+    if n:
+        changed += n
+        if kept: cfg["clientFeeds"] = kept
+        else: cfg.pop("clientFeeds", None)
+        print("  removed %d client feed(s) matching '%s'" % (n, arg))
+if not changed:
     print("  no feed matched: %s" % arg); sys.exit(0)
-cfg["clientFeeds"] = kept
 with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False); f.write("\n")
-print("  removed %d feed(s) matching '%s'" % (n, arg))
 PY
 }
 
@@ -217,11 +296,12 @@ except Exception:
     cfg = {}
 feeds = (cfg or {}).get("clientFeeds") or []
 if isinstance(feeds, list) and feeds:
-    print("  Your own feeds (fetched on this machine):")
+    print("  Client feeds (backend can't reach these; fetched on this machine):")
     for f in feeds:
         if isinstance(f, dict):
             print("     - %s  %s" % (f.get("name", ""), f.get("url", "")))
 print("  Add your own:  /claudenews:list add r/<subreddit>   (or any RSS URL)")
+print("  Turn one off:  /claudenews:list rmfeed <id | r/sub | url-fragment>")
 PY
 }
 

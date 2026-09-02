@@ -277,7 +277,10 @@ def fetch_sources_catalog(api_url):
     try:
         req = urllib.request.Request(f"{api_url}/api/sources", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            catalog = (json.loads(resp.read()) or {}).get("sources") or []
+            data = json.loads(resp.read()) or {}
+            # Built-in catalog + the shared registry of user-registered feeds
+            # (custom: True). Both are toggled by id the same way.
+            catalog = (data.get("sources") or []) + (data.get("customFeeds") or [])
         if catalog:
             try:
                 with open(SOURCES_CACHE, "w", encoding="utf-8") as f:
@@ -788,6 +791,109 @@ def refresh_clientfeeds_cache(feeds):
     return items
 
 
+FEEDS_MIGRATE_MARKER = os.path.join(CONFIG_DIR, ".feeds-migrate.ts")
+FEEDS_MIGRATE_RETRY_SEC = 6 * 3600
+
+
+def register_feed(api_url, url, name="", lang=""):
+    """Register a feed in the server's shared registry. Returns (feed, error)
+    where feed = {id,name,url,lang} on success; error carries 'unreachable'
+    when the backend cannot fetch that URL (keep it as a client feed)."""
+    body = json.dumps({"url": url, "name": name, "lang": lang}).encode()
+    req = urllib.request.Request(
+        f"{api_url}/api/feeds", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read()) or {}
+        if data.get("ok") and data.get("feed"):
+            return data["feed"], None
+        return None, data.get("error") or "register failed"
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read()) or {}
+        except Exception:
+            data = {}
+        err = data.get("error") or f"http {e.code}"
+        if data.get("unreachable"):
+            err = "unreachable"
+        return None, err
+    except Exception as e:
+        return None, f"network: {e}"
+
+
+def migrate_client_feeds(api_url):
+    """One-shot (retried at most every FEEDS_MIGRATE_RETRY_SEC): move legacy
+    config['clientFeeds'] into the server registry and enable the resulting
+    source ids. Feeds the backend can't reach stay as client feeds (fetched
+    locally), everything else is dropped from clientFeeds."""
+    cfg = load_config() or {}
+    feeds = cfg.get("clientFeeds")
+    if not isinstance(feeds, list) or not feeds:
+        return
+    try:
+        with open(FEEDS_MIGRATE_MARKER, "w") as f:
+            f.write(str(int(time.time())))
+    except Exception:
+        pass
+    keep, sel = [], cfg.get("sources") if isinstance(cfg.get("sources"), dict) else {}
+    migrated = 0
+    for f in feeds:
+        if not isinstance(f, dict) or not f.get("url"):
+            continue
+        feed, err = register_feed(api_url, f["url"], f.get("name") or "", f.get("lang") or "")
+        if feed:
+            sel[feed["id"]] = True
+            migrated += 1
+            log(f"feed migrated to server: {feed['name']} -> {feed['id']}")
+        else:
+            keep.append(f)
+            log(f"feed kept client-side ({err}): {f.get('name') or f['url']}")
+            if str(err).startswith("network"):
+                # Backend down: keep the rest too and try again later.
+                keep.extend(x for x in feeds if x is not f and x not in keep)
+                break
+    if not migrated:
+        return
+    cfg = load_config() or {}
+    cfg["sources"] = {**(cfg.get("sources") or {}), **sel}
+    cfg["sourcesConfigured"] = True
+    if keep:
+        cfg["clientFeeds"] = keep
+    else:
+        cfg.pop("clientFeeds", None)
+    try:
+        atomic_write_json(CONFIG_FILE, cfg)
+    except Exception as e:
+        log(f"feed migration: config write failed: {e}")
+        return
+    try:
+        os.unlink(SOURCES_CACHE)   # pick up the new ids on the next catalog fetch
+    except Exception:
+        pass
+    log(f"feed migration done: {migrated} moved, {len(keep)} kept client-side")
+
+
+def _spawn_feeds_migration():
+    try:
+        st = os.stat(FEEDS_MIGRATE_MARKER)
+        if time.time() - st.st_mtime < FEEDS_MIGRATE_RETRY_SEC:
+            return
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--migrate-feeds"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        log(f"feed migration spawn failed: {e}")
+
+
 def _spawn_clientfeeds_refresh():
     """Refresh client feeds in a DETACHED process so the 5s news hook never
     blocks on their network fetch."""
@@ -821,7 +927,8 @@ def merge_client_feeds(items, config):
 def save_news_list(items):
     """Persist the ordered candidate list so --nav can step through it."""
     slim = [
-        {k: it.get(k) for k in ("title", "url", "source", "score", "comments", "lang")}
+        {k: it.get(k) for k in ("title", "url", "source", "score", "comments",
+                                "lang", "feed_text", "custom")}
         for it in items
         if isinstance(it, dict) and it.get("url")
     ]
@@ -905,7 +1012,8 @@ def do_nav(direction):
     original_title = item.get("title", "") or ""
     summary_lang = target_lang if translate_enabled else "en"
     if url and not cached_summary(url, summary_lang):
-        launch_summarizer(url, original_title, summary_lang)
+        launch_summarizer(url, original_title, summary_lang,
+                          raw_text=item.get("feed_text") or "")
     if (translate_enabled and item.get("lang") != target_lang
             and not cached_translation(original_title, target_lang)):
         launch_translator(original_title, target_lang)
@@ -925,7 +1033,8 @@ def do_nav(direction):
                 and n_title and not cached_translation(n_title, target_lang)):
             launch_translator(n_title, target_lang)
         if off <= 2 and n_url and not cached_summary(n_url, summary_lang):
-            launch_summarizer(n_url, n_title, summary_lang)
+            launch_summarizer(n_url, n_title, summary_lang,
+                              raw_text=nxt.get("feed_text") or "")
     log(f"nav {direction} -> [{index}/{len(items)}] {record.get('title', '')[:40]}")
 
 
@@ -981,6 +1090,12 @@ def main():
         return
 
     save_timestamp(last_open_file)
+
+    # Legacy client-fetched feeds move into the server's shared registry
+    # (detached; the hook never waits on it). Whatever the backend can't
+    # reach stays client-fetched via merge_client_feeds below.
+    if (config or {}).get("clientFeeds"):
+        _spawn_feeds_migration()
 
     catalog = fetch_sources_catalog(api_url)
     selected = resolve_sources(config, catalog)
@@ -1048,13 +1163,14 @@ def main():
         return [it for it in lst if it.get("url") not in recent]
 
     # Eligible for rotation = has a cached summary (instant full render) OR is a
-    # client-feed item. Client feeds (e.g. Reddit) never get a scrapable summary,
-    # but should still rotate into the status line (title-only) instead of being
-    # reachable by nav only.
+    # feed item (server-registered custom feed or legacy client feed). Those
+    # sources (e.g. Reddit) never get a scrapable summary, but should still
+    # rotate into the status line (title-only) instead of being nav-only.
     cached_candidates = [
         it for it in items
         if isinstance(it, dict) and it.get("url")
-        and (cached_summary(it["url"], summary_lang) or it.get("clientfeed"))
+        and (cached_summary(it["url"], summary_lang)
+             or it.get("clientfeed") or it.get("custom"))
     ]
     # Prefer cached-summary items not shown recently; degrade gracefully so we
     # still end up with something when everything's been seen.
@@ -1146,7 +1262,8 @@ def main():
 
     # Launch summarizer if URL present and no cached summary yet
     if url and not summary:
-        launch_summarizer(url, original_title, summary_lang)
+        launch_summarizer(url, original_title, summary_lang,
+                          raw_text=pick.get("feed_text") or "")
         log(f"launched summarizer ({summary_lang})")
 
     # Pre-warm cache so rotation has enough cached-summary items to draw from
@@ -1176,7 +1293,8 @@ def main():
             continue
         if cached_summary(item_url, summary_lang):
             continue
-        launch_summarizer(item_url, item_title, summary_lang)
+        launch_summarizer(item_url, item_title, summary_lang,
+                          raw_text=item.get("feed_text") or "")
         prewarmed += 1
     if prewarmed:
         log(
@@ -1201,6 +1319,13 @@ if __name__ == "__main__":
             refresh_clientfeeds_cache((_cfg or {}).get("clientFeeds") or [])
         except Exception as e:
             log(f"client feeds refresh error: {e}")
+        sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == "--migrate-feeds":
+        try:
+            _cfg = load_config() or {}
+            migrate_client_feeds(_cfg.get("apiUrl", DEFAULT_API))
+        except Exception as e:
+            log(f"feed migration error: {e}")
         sys.exit(0)
     if len(sys.argv) >= 2 and sys.argv[1] == "--nav":
         _direction = sys.argv[2] if len(sys.argv) >= 3 else "next"

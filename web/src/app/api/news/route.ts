@@ -1,17 +1,9 @@
 import { NextRequest } from "next/server";
 import { CATALOG_BY_ID } from "@/lib/sources";
+import { findCustomFeed, isCustomFeedId } from "@/lib/feeds";
+import type { NewsItem } from "@/lib/news-item";
+import { CUSTOM_FEED_OPTS, fetchRss } from "@/lib/rss";
 
-export interface NewsItem {
-  id: string;
-  title: string;
-  url: string;
-  source: string;
-  lang?: string;
-  score?: number;
-  comments?: number;
-  author?: string;
-  timestamp: number;
-}
 
 // Per-source in-memory cache (lives for the function's warm duration).
 // Keyed by source id so different ?sources= combinations share fetches.
@@ -89,75 +81,24 @@ async function fetchGitHubTrending(): Promise<NewsItem[]> {
   }
 }
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/<[^>]+>/g, "")
-    .trim();
-}
-
-// Minimal RSS 2.0 / Atom parser (regex, no deps). Only used for PUBLIC
-// catalog feeds (e.g. GeekNews), never user-private URLs.
-async function fetchRss(url: string, sourceName: string): Promise<NewsItem[]> {
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "claudenews/1.0" },
-      next: { revalidate: 600 },
-    });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    const blocks =
-      xml.indexOf("<item") !== -1
-        ? xml.split(/<item[\s>]/).slice(1)
-        : xml.split(/<entry[\s>]/).slice(1);
-    const pick = (b: string, tag: string) => {
-      const m = b.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
-      return m ? decodeEntities(m[1]) : "";
-    };
-    const out: NewsItem[] = [];
-    for (const b of blocks.slice(0, 30)) {
-      const title = pick(b, "title");
-      let link = pick(b, "link");
-      if (!link) {
-        const hm = b.match(/<link[^>]*href=["']([^"']+)["']/i); // Atom
-        link = hm ? hm[1] : "";
-      }
-      if (!title || !link) continue;
-      const ts =
-        Date.parse(pick(b, "pubDate") || pick(b, "updated") || "") || Date.now();
-      out.push({
-        id: `rss-${sourceName}-${link}`,
-        title,
-        url: link,
-        source: sourceName,
-        timestamp: ts,
-      });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
 async function getSource(id: string): Promise<NewsItem[]> {
   const c = cache[id];
   if (c && Date.now() - c.at < CACHE_TTL_MS) return c.items;
   let items: NewsItem[] = [];
   if (id === "hn") items = await fetchHackerNews();
   else if (id === "github") items = await fetchGitHubTrending();
-  else {
+  else if (isCustomFeedId(id)) {
+    const feed = await findCustomFeed(id);
+    if (feed) items = await fetchRss(feed.url, feed.name, CUSTOM_FEED_OPTS);
+  } else {
     const def = CATALOG_BY_ID[id];
     if (def?.type === "rss" && def.url)
       items = await fetchRss(def.url, def.name);
   }
   // Tag each item with its source's content language so the plugin can skip
   // translating a source that's already in the user's target language.
-  const lang = CATALOG_BY_ID[id]?.lang ?? "en";
+  let lang = CATALOG_BY_ID[id]?.lang ?? "en";
+  if (isCustomFeedId(id)) lang = (await findCustomFeed(id))?.lang ?? "en";
   items = items.map((it) => ({ ...it, lang }));
   cache[id] = { items, at: Date.now() };
   return items;
@@ -180,7 +121,7 @@ export async function GET(request: NextRequest) {
   const requested = (request.nextUrl.searchParams.get("sources") || "")
     .split(",")
     .map((s) => s.trim())
-    .filter((s) => s && CATALOG_BY_ID[s]);
+    .filter((s) => s && (CATALOG_BY_ID[s] || isCustomFeedId(s)));
   // Default to the always-on builtin sources if none specified.
   const ids = requested.length ? requested : ["hn", "github"];
 

@@ -152,19 +152,23 @@ backend; your selection just tells it what to merge.
 
 A few optional knobs you can set by hand (the plugin manages the rest):
 
-- **`clientFeeds`** — add any RSS/Atom feed the backend can't reach, fetched
-  from your own machine instead. Reddit is the headline case: it 403s
-  datacenter IPs, but `www.reddit.com/r/<sub>/.rss` works from a normal
-  machine. Items flow through rotation / nav / translation / summary exactly
-  like built-in sources — there's no per-source code, just URLs.
+- **Your own feeds** — add any RSS/Atom feed with **`/claudenews:list add r/<sub>`**
+  or `/claudenews:list add <url>` (or just ask Claude — *"add r/rust"*). The
+  feed is registered in the backend's **shared registry**: it gets a public
+  source id (`cf-…`), the backend fetches it once per cache window for every
+  install (so rate-limited hosts like Reddit see one request instead of one per
+  user), and anyone can enable it from `/claudenews:list`. Items flow through
+  rotation / nav / translation / summary exactly like built-in sources — the
+  feed's own body text is used for the summary when the page blocks scraping.
+  `/claudenews:list rmfeed <id | r/sub>` turns it off for you (the registry is
+  shared, so nothing is deleted for others).
 
-  Easiest way to add one: **`/claudenews:list add r/<sub>`** (or just ask
-  Claude — *"add r/rust"*); `/claudenews:list rmfeed r/<sub>` removes it. The
-  command writes this for you, and you can also edit it by hand:
+  Existing `clientFeeds` entries are migrated to the registry automatically.
+  Only a feed the backend genuinely cannot fetch stays in **`clientFeeds`**
+  (fetched from your own machine); you can still add one by hand:
 
   ```json
   "clientFeeds": [
-    {"name": "👽 r/ClaudeAI", "url": "https://www.reddit.com/r/ClaudeAI/.rss"},
     {"name": "🐘 #rust", "url": "https://mastodon.social/tags/rust.rss", "lang": "en"}
   ]
   ```
