@@ -817,7 +817,9 @@ def register_feed(api_url, url, name="", lang=""):
             data = {}
         err = data.get("error") or f"http {e.code}"
         if data.get("unreachable"):
-            err = "unreachable"
+            # Origin status travels along: 429 = the backend got rate-limited
+            # by the feed host (Reddit: ~1 req/30s/IP), i.e. retryable.
+            err = "rate-limited" if data.get("status") == 429 else "unreachable"
         return None, err
     except Exception as e:
         return None, f"network: {e}"
@@ -839,10 +841,22 @@ def migrate_client_feeds(api_url):
         pass
     keep, sel = [], cfg.get("sources") if isinstance(cfg.get("sources"), dict) else {}
     migrated = 0
+    last_hit = {}   # host -> monotonic time the backend last probed it
     for f in feeds:
         if not isinstance(f, dict) or not f.get("url"):
             continue
+        # The backend probes the URL at registration, so two feeds on the same
+        # rate-limited host (Reddit) must be spaced like client fetches are.
+        host = _feed_host(f["url"])
+        gap = CLIENTFEED_SAME_HOST_GAP_SEC - (time.monotonic() - last_hit.get(host, -1e9))
+        if gap > 0:
+            time.sleep(gap)
+        last_hit[host] = time.monotonic()
         feed, err = register_feed(api_url, f["url"], f.get("name") or "", f.get("lang") or "")
+        if err == "rate-limited":
+            time.sleep(CLIENTFEED_SAME_HOST_GAP_SEC)
+            last_hit[host] = time.monotonic()
+            feed, err = register_feed(api_url, f["url"], f.get("name") or "", f.get("lang") or "")
         if feed:
             sel[feed["id"]] = True
             migrated += 1

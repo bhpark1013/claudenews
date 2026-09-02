@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
   if (!probe.ok) {
     const why = probe.status ? `feed fetch failed (${probe.status})` : "feed fetch failed";
     return Response.json(
-      { ok: false, error: why, unreachable: true },
+      { ok: false, error: why, unreachable: true, status: probe.status },
       { status: 422 }
     );
   }

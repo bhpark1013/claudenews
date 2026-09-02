@@ -205,6 +205,12 @@ except urllib.error.HTTPError as e:
     except Exception: d = {}
     err = d.get("error") or ("http %s" % e.code)
     unreachable = bool(d.get("unreachable"))
+    if d.get("status") == 429:
+        # The feed host rate-limited the backend (Reddit: ~1 request / 30s per
+        # IP). Not a reachability problem — just try again shortly.
+        print("  the feed host rate-limited the backend (429) — run this again in ~30s:")
+        print("    /claudenews:list add %s" % arg)
+        sys.exit(0)
 except Exception as e:
     err = "backend unreachable (%s)" % e
 
