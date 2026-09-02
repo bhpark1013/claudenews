@@ -1,8 +1,11 @@
 import { CATALOG } from "@/lib/sources";
+import { loadCustomFeeds } from "@/lib/feeds";
 
-// Static catalog the plugin fetches to render its source toggle list.
-// No request data is read; same response for everyone.
+// Source catalog the plugin fetches to render its toggle list: the static
+// built-in catalog plus the shared registry of user-registered feeds
+// (customFeeds). Same response for everyone.
 export async function GET() {
+  const custom = await loadCustomFeeds();
   return Response.json(
     {
       sources: CATALOG.map((s) => ({
@@ -13,7 +16,17 @@ export async function GET() {
         defaultOn: s.defaultOn,
         defaultOnLangs: s.defaultOnLangs ?? [],
       })),
+      customFeeds: custom.map((f) => ({
+        id: f.id,
+        name: f.name,
+        type: "rss",
+        lang: f.lang,
+        url: f.url,
+        custom: true,
+        defaultOn: false,
+        defaultOnLangs: [],
+      })),
     },
-    { headers: { "Cache-Control": "public, max-age=3600" } }
+    { headers: { "Cache-Control": "public, max-age=300" } }
   );
 }
