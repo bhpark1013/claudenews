@@ -87,11 +87,22 @@ export function parseFeedXml(
   return out;
 }
 
-export async function fetchRss(
+export interface FeedFetchResult {
+  ok: boolean;       // HTTP fetch succeeded (2xx)
+  status: number;    // HTTP status, 0 on network error/timeout
+  items: NewsItem[];
+}
+
+// One fetch path for catalog feeds, custom feeds AND the registration probe.
+// Uses Next's Data Cache (revalidate) so a feed fetched by /api/feeds at
+// registration is served from cache to the /api/news call that follows —
+// one origin request instead of two, which matters for hosts that
+// rate-limit per IP (Reddit: ~1 unauthenticated request / 30s).
+export async function fetchFeed(
   url: string,
   sourceName: string,
   opts: RssOptions = {}
-): Promise<NewsItem[]> {
+): Promise<FeedFetchResult> {
   try {
     const res = await fetch(url, {
       headers: {
@@ -101,12 +112,20 @@ export async function fetchRss(
       next: { revalidate: 600 },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) return { ok: false, status: res.status, items: [] };
     const xml = (await res.text()).slice(0, 1_000_000);
-    return parseFeedXml(xml, sourceName, opts);
+    return { ok: true, status: res.status, items: parseFeedXml(xml, sourceName, opts) };
   } catch {
-    return [];
+    return { ok: false, status: 0, items: [] };
   }
+}
+
+export async function fetchRss(
+  url: string,
+  sourceName: string,
+  opts: RssOptions = {}
+): Promise<NewsItem[]> {
+  return (await fetchFeed(url, sourceName, opts)).items;
 }
 
 // User-registered feeds: browser UA (Reddit), small per-feed cap so one feed

@@ -10,7 +10,7 @@ import {
   saveCustomFeeds,
 } from "@/lib/feeds";
 import { kvConfigured } from "@/lib/kv";
-import { BROWSER_UA, CUSTOM_FEED_OPTS, parseFeedXml } from "@/lib/rss";
+import { CUSTOM_FEED_OPTS, fetchFeed } from "@/lib/rss";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
@@ -38,17 +38,17 @@ export async function POST(request: NextRequest) {
   } catch {
     return Response.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
-  if (!kvConfigured) {
-    return Response.json(
-      { ok: false, error: "registry unavailable" },
-      { status: 503 }
-    );
-  }
   const url = normalizeFeedUrl(String(body.url ?? ""));
   if (!url) {
     return Response.json(
       { ok: false, error: "invalid url (public http/https feed required)" },
       { status: 400 }
+    );
+  }
+  if (!kvConfigured) {
+    return Response.json(
+      { ok: false, error: "registry unavailable" },
+      { status: 503 }
     );
   }
   const id = feedIdFor(url);
@@ -64,29 +64,19 @@ export async function POST(request: NextRequest) {
     );
   }
   const name = sanitizeName(body.name, url);
-  // Prove the backend can fetch + parse it before anyone can enable it.
-  let entries = 0;
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": BROWSER_UA, Accept: "*/*" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      return Response.json(
-        { ok: false, error: `feed fetch failed (${res.status})`, unreachable: true },
-        { status: 422 }
-      );
-    }
-    const xml = (await res.text()).slice(0, 1_000_000);
-    entries = parseFeedXml(xml, name, { ...CUSTOM_FEED_OPTS, maxAgeDays: 0 }).length;
-  } catch {
+  // Prove the backend can fetch + parse it before anyone can enable it. Same
+  // fetch path (and cache) as /api/news, so this probe is the ONLY origin
+  // request for the next 10 minutes. Age gate off: an all-old-but-valid feed
+  // still registers.
+  const probe = await fetchFeed(url, name, { ...CUSTOM_FEED_OPTS, maxAgeDays: 0 });
+  if (!probe.ok) {
+    const why = probe.status ? `feed fetch failed (${probe.status})` : "feed fetch failed";
     return Response.json(
-      { ok: false, error: "feed fetch failed", unreachable: true },
+      { ok: false, error: why, unreachable: true },
       { status: 422 }
     );
   }
-  if (!entries) {
+  if (!probe.items.length) {
     return Response.json(
       { ok: false, error: "no RSS/Atom entries found at that url" },
       { status: 422 }
