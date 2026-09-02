@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from background_claude import (
@@ -528,6 +529,23 @@ def nav_enabled(config):
 CLIENTFEEDS_CACHE_FILE = os.path.join(CONFIG_DIR, ".clientfeeds-cache.json")
 CLIENTFEEDS_TTL_SEC = 900       # refetch a client feed at most every 15 min
 CLIENTFEED_PER_SOURCE = 12      # cap items kept per feed
+# Drop feed entries older than this. Reddit's default /.rss (hot) puts pinned
+# mod posts FIRST, and pinned megathreads can be months old — without an age
+# gate they enter rotation looking like news. Dateless entries pass (no info).
+CLIENTFEED_MAX_AGE_DAYS = 14
+# Reddit rate-limits UNAUTHENTICATED requests per IP regardless of path — the
+# /.rss endpoint gets the same tiny quota as everything else (measured 2026-09:
+# 1 request per ~30s window; x-ratelimit-remaining hits 0 after ONE fetch).
+# Two subreddit feeds fetched back-to-back therefore always 429 the second.
+# So: space requests to the same host, and on 429 honour x-ratelimit-reset
+# once. Safe to sleep here — this runs in the detached --feeds-refresh
+# process, never in the 5s status-line hook.
+CLIENTFEED_SAME_HOST_GAP_SEC = 35
+CLIENTFEED_429_RETRY_MAX_SEC = 90
+# In-flight marker so concurrent sessions don't each spawn a refresh (each
+# would burn the same per-IP quota). Stale after this many seconds.
+CLIENTFEEDS_LOCK_FILE = os.path.join(CONFIG_DIR, ".clientfeeds-refresh.lock")
+CLIENTFEEDS_LOCK_STALE_SEC = 600
 # A browser UA: required by Reddit, harmless for any other feed.
 CLIENTFEED_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -551,11 +569,13 @@ def parse_feed(xml_text):
     for el in root.iter():
         if lname(el.tag) not in ("item", "entry"):
             continue
-        title, link, bodies = None, None, {}
+        title, link, bodies, published = None, None, {}, None
         for child in el:
             lt = lname(child.tag)
             if lt == "title" and child.text and not title:
                 title = child.text.strip()
+            elif lt in ("published", "updated", "pubdate", "date") and child.text and not published:
+                published = child.text.strip()
             elif lt == "link":
                 href = child.get("href")            # Atom: <link href="..."/>
                 if href:
@@ -573,8 +593,27 @@ def parse_feed(xml_text):
                 bodies.get("content") or bodies.get("encoded")
                 or bodies.get("description") or bodies.get("summary") or ""
             )
-            out.append({"title": title, "link": link, "body": body})
+            out.append({"title": title, "link": link, "body": body, "published": published})
     return out
+
+
+def _feed_entry_age_days(published):
+    """Best-effort age in days from an RSS/Atom date string; None if unparsable."""
+    if not published:
+        return None
+    from datetime import datetime, timezone
+    dt = None
+    try:  # ISO 8601 (Atom: 2025-12-18T13:45:29+00:00)
+        dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+    except Exception:
+        try:  # RFC 822 (RSS: Thu, 18 Dec 2025 13:45:29 GMT)
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(published)
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).total_seconds() / 86400
 
 
 def _strip_html(s):
@@ -585,10 +624,52 @@ def _strip_html(s):
     return re.sub(r"\s+", " ", t).strip()
 
 
-def fetch_client_feeds(feeds):
+def _feed_host(url):
+    try:
+        from urllib.parse import urlsplit
+        return (urlsplit(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _fetch_feed_xml(url, name):
+    """One feed fetch with a single 429-aware retry. Returns xml text or None."""
+    def _get():
+        req = urllib.request.Request(
+            url, headers={"User-Agent": CLIENTFEED_UA, "Accept": "*/*"}
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            return resp.read(1_000_000).decode("utf-8", "replace")
+    try:
+        return _get()
+    except urllib.error.HTTPError as e:
+        if e.code != 429:
+            log(f"client feed fetch failed ({name}): {e}")
+            return None
+        try:
+            wait = float((e.headers or {}).get("x-ratelimit-reset") or 0) + 2
+        except Exception:
+            wait = 0
+        wait = max(5.0, min(wait, CLIENTFEED_429_RETRY_MAX_SEC))
+        log(f"client feed 429 ({name}); retrying in {wait:.0f}s")
+        time.sleep(wait)
+        try:
+            return _get()
+        except Exception as e2:
+            log(f"client feed fetch failed after retry ({name}): {e2}")
+            return None
+    except Exception as e:
+        log(f"client feed fetch failed ({name}): {e}")
+        return None
+
+
+def fetch_client_feeds(feeds, prev_items=None):
     """Fetch each client feed URL directly and map entries to news items.
-    Source-agnostic; best-effort (a failing feed is logged and skipped)."""
+    Source-agnostic; best-effort. A failing feed keeps its previously cached
+    items (prev_items) so a transient 429 doesn't blank that source."""
     out, seen = [], set()
+    last_hit = {}   # host -> monotonic time of the last request to it
+    failed = []
     for f in feeds:
         if not isinstance(f, dict):
             continue
@@ -597,14 +678,15 @@ def fetch_client_feeds(feeds):
             continue
         name = (f.get("name") or "").strip() or url
         lang = (f.get("lang") or "en").strip() or "en"
-        try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": CLIENTFEED_UA, "Accept": "*/*"}
-            )
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                xml = resp.read(1_000_000).decode("utf-8", "replace")
-        except Exception as e:
-            log(f"client feed fetch failed ({name}): {e}")
+        host = _feed_host(url)
+        if host in last_hit:
+            gap = CLIENTFEED_SAME_HOST_GAP_SEC - (time.monotonic() - last_hit[host])
+            if gap > 0:
+                time.sleep(gap)
+        last_hit[host] = time.monotonic()
+        xml = _fetch_feed_xml(url, name)
+        if xml is None:
+            failed.append(name)
             continue
         n = 0
         for entry in parse_feed(xml):
@@ -612,6 +694,9 @@ def fetch_client_feeds(feeds):
                 break
             if entry["link"] in seen:
                 continue
+            age = _feed_entry_age_days(entry.get("published"))
+            if age is not None and age > CLIENTFEED_MAX_AGE_DAYS:
+                continue  # stale (e.g. an old pinned post surfaced by hot-order feeds)
             seen.add(entry["link"])
             out.append({
                 "title": entry["title"], "url": entry["link"],
@@ -619,6 +704,15 @@ def fetch_client_feeds(feeds):
                 "feed_text": _strip_html(entry.get("body", ""))[:1500],
             })
             n += 1
+    if failed and prev_items:
+        kept = [
+            it for it in prev_items
+            if isinstance(it, dict) and it.get("source") in failed
+            and it.get("url") not in seen
+        ]
+        if kept:
+            log(f"client feeds: kept {len(kept)} cached item(s) for failed {failed}")
+            out.extend(kept)
     return out
 
 
@@ -631,8 +725,42 @@ def load_clientfeeds_cache():
         return [], 0
 
 
+def _acquire_clientfeeds_lock():
+    """True if this process may refresh; False if another refresh is in flight."""
+    try:
+        st = os.stat(CLIENTFEEDS_LOCK_FILE)
+        if time.time() - st.st_mtime < CLIENTFEEDS_LOCK_STALE_SEC:
+            return False
+        os.unlink(CLIENTFEEDS_LOCK_FILE)   # stale (crashed refresh)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        return False
+    try:
+        fd = os.open(CLIENTFEEDS_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except Exception:
+        return False
+
+
+def _release_clientfeeds_lock():
+    try:
+        os.unlink(CLIENTFEEDS_LOCK_FILE)
+    except Exception:
+        pass
+
+
 def refresh_clientfeeds_cache(feeds):
-    items = fetch_client_feeds(feeds)
+    if not _acquire_clientfeeds_lock():
+        log("client feeds refresh skipped: another refresh in flight")
+        return []
+    try:
+        prev_items, _ = load_clientfeeds_cache()
+        items = fetch_client_feeds(feeds, prev_items)
+    finally:
+        _release_clientfeeds_lock()
     if items:
         atomic_write_json(
             CLIENTFEEDS_CACHE_FILE, {"items": items, "ts": int(time.time() * 1000)}
