@@ -389,17 +389,37 @@ if (!navEnabled) {
   }
 }
 
+// Every field below comes straight from a remote feed (RSS/HN/reddit/a
+// server-registered custom feed), so none of it can be trusted to be plain
+// text. Strip C0 controls, DEL, and C1 (\x1b included) BEFORE any width math
+// or escape-sequence construction: stripping after truncateCols/visibleCols
+// would compute the column budget against the unstripped string and drift
+// the layout. Only control bytes are removed — emoji, CJK, box-drawing, and
+// all other Unicode pass through untouched.
+function strip(s) {
+  return String(s).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+}
+
 let newsLine = "";
 if (existsSync(newsFilePath)) {
   try {
     const raw = JSON.parse(readFileSync(newsFilePath, "utf-8"));
     const age = (Date.now() - raw.timestamp) / 1000;
     if (age < NEWS_TTL_SEC) {
-      const source = raw.source || "";
-      const url = raw.url || "";
-      const scoreStr = raw.score ? ` \x1b[33m▲${raw.score}\x1b[0m` : "";
+      const source = strip(raw.source || "");
+      // Only ever hyperlink to http(s). A feed-supplied scheme like
+      // "javascript:" or a broken-out OSC 8 escape hidden in the url field
+      // must never reach the terminal as a clickable target — fall through
+      // to the plain (non-link) render instead of emitting a bad anchor.
+      const strippedUrl = strip(raw.url || "");
+      const url = /^https?:\/\//i.test(strippedUrl) ? strippedUrl : "";
+      // Preserve the original truthy check (score/comments of 0 stay hidden)
+      // on the raw value, but sanitize what actually gets interpolated.
+      const scoreStr = raw.score
+        ? ` \x1b[33m▲${strip(String(raw.score))}\x1b[0m`
+        : "";
       const commentsStr = raw.comments
-        ? ` \x1b[90m💬${raw.comments}\x1b[0m`
+        ? ` \x1b[90m💬${strip(String(raw.comments))}\x1b[0m`
         : "";
       // Truncate the title to what actually remains of line 1 after the
       // label/source prefix and the score/comments suffix. Truncating to the
@@ -410,13 +430,15 @@ if (existsSync(newsFilePath)) {
         `${FEED_LABEL} ${source} │ ${scoreStr}${commentsStr}`
       );
       const title = truncateCols(
-        raw.title || "",
+        strip(raw.title || ""),
         Math.max(16, maxCols - fixedCols)
       );
 
       // Title is always an OSC 8 hyperlink so a click / ⌘-click opens the
       // article. Terminals without OSC 8 support just render the plain title
-      // (the escape is invisible), so this is safe everywhere.
+      // (the escape is invisible), so this is safe everywhere. `url` above is
+      // already stripped and scheme-validated, so it cannot break out of the
+      // OSC 8 framing or retarget the link.
       const titleStyled = url
         ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
         : `\x1b[37m${title}\x1b[0m`;
@@ -455,7 +477,7 @@ if (existsSync(newsFilePath)) {
         }
       }
 
-      const summary = (raw.summary || "").trim();
+      const summary = strip(raw.summary || "").trim();
       if (summary) {
         // "       ↳ " prefix is 9 display cols; continuation lines indent
         // 9 spaces so wrapped text stays aligned under the first line.
