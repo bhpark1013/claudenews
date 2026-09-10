@@ -100,6 +100,18 @@ try {
   }
 } catch {}
 
+// `--segment` renders a single embeddable line instead of taking over the whole
+// status line. It exists so claudenews can run as a ccstatusline Custom Command
+// widget (and any other host that composes widgets), where owning the entire
+// statusLine slot is not an option. Differences from the standalone HUD:
+//   - no parent status-line chaining: the host already draws the other widgets
+//   - no summary line and no rotating guide: a widget gets one line, and hint
+//     text belongs to the host's own onboarding, not to a borrowed row
+//   - no OSC 8 hyperlink: the host measures widget width to lay the row out,
+//     and a hyperlink escape it does not account for would skew that
+//   - width comes from the host's `terminal_width` rather than being sniffed
+const SEGMENT = process.argv.includes("--segment");
+
 let parentOutput = "";
 let maxCols = 120; // safe default — Claude Code's statusline doesn't pass width
 let userOverrodeMaxCols = false;
@@ -164,6 +176,18 @@ if (!userOverrodeMaxCols) {
 // the ±1 col our width count can differ from CC's for an ambiguous-width glyph
 // like the "↳" summary marker.
 maxCols = Math.max(20, maxCols - 2);
+
+if (SEGMENT) {
+  // The host owns the row; anything we detected about the terminal is noise.
+  parentOutput = "";
+  try {
+    // ccstatusline passes terminal_width on stdin when it can detect it.
+    const hostCols = Number((JSON.parse(stdinData) || {}).terminal_width);
+    if (Number.isFinite(hostCols) && hostCols >= 20) {
+      maxCols = Math.max(20, Math.floor(hostCols) - 2);
+    }
+  } catch {}
+}
 
 // Cache the detected width so the (possibly expensive, e.g. iTerm AppleScript)
 // probe runs at most once per TTL instead of on EVERY status-line render. This
@@ -458,8 +482,10 @@ if (existsSync(newsFilePath)) {
       // article. Terminals without OSC 8 support just render the plain title
       // (the escape is invisible), so this is safe everywhere. `url` above is
       // already stripped and scheme-validated, so it cannot break out of the
-      // OSC 8 framing or retarget the link.
-      const titleStyled = url
+      // OSC 8 framing or retarget the link. Segment mode drops the hyperlink
+      // entirely: the host measures widget width to lay out the row and would
+      // not account for the escape.
+      const titleStyled = url && !SEGMENT
         ? `\x1b]8;;${url}\x07\x1b[37;4m${title}\x1b[0m\x1b]8;;\x07`
         : `\x1b[37m${title}\x1b[0m`;
 
@@ -473,7 +499,7 @@ if (existsSync(newsFilePath)) {
 
       // Rotating usage guide appended to the END of line 1 (server-driven,
       // built-in fallback) — only if it still fits so the line never wraps.
-      {
+      if (!SEGMENT) {
         const evergreen = loadServerGuides() || GUIDES_EVERGREEN;
         let pool = sourcesConfigured
           ? evergreen
@@ -498,7 +524,7 @@ if (existsSync(newsFilePath)) {
       }
 
       const summary = strip(raw.summary || "").trim();
-      if (summary) {
+      if (summary && !SEGMENT) {
         // "       ↳ " prefix is 9 display cols; continuation lines indent
         // 9 spaces so wrapped text stays aligned under the first line.
         const innerWidth = Math.max(20, maxCols - 9);
@@ -641,10 +667,17 @@ function terminalSupportsNav() {
   return false;
 }
 
-if (parentOutput) {
-  process.stdout.write(parentOutput);
+if (SEGMENT) {
+  // Exactly one line, always terminated: a host that reads a single line of
+  // stdout must not block waiting for a newline that never arrives, and an
+  // empty line is the correct "nothing to show" answer.
+  process.stdout.write(newsLine + "\n");
+} else {
+  if (parentOutput) {
+    process.stdout.write(parentOutput);
+  }
+  if (newsLine) {
+    process.stdout.write((parentOutput ? "\n" : "") + newsLine);
+  }
+  process.stdout.write("\n");
 }
-if (newsLine) {
-  process.stdout.write((parentOutput ? "\n" : "") + newsLine);
-}
-process.stdout.write("\n");
