@@ -80,6 +80,26 @@ try {
   stdinData = readFileSync(0, "utf-8");
 } catch {}
 
+// Per-session mute. `/session-hud off` drops a marker file named after the
+// session id; this check runs before any other work so a muted session costs
+// nothing at refreshInterval 1. Living here rather than in the thin launcher
+// at ~/.claude/hud/ is deliberate: /claudenews:setup rewrites that launcher on
+// every update, which is what silently removed an earlier hand-patched version
+// of this check. Failing open (HUD visible) is the safe default.
+const MUTE_DIR = join(HOME, ".claudenews/disabled-sessions");
+try {
+  const sid = String((JSON.parse(stdinData) || {}).session_id || "")
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .slice(0, 64);
+  if (sid && existsSync(join(MUTE_DIR, sid))) {
+    // One blank line, not an empty string: Claude Code keeps the status-line
+    // row either way, and printing nothing at all makes some terminals reuse
+    // the previous frame.
+    process.stdout.write("\n");
+    process.exit(0);
+  }
+} catch {}
+
 let parentOutput = "";
 let maxCols = 120; // safe default — Claude Code's statusline doesn't pass width
 let userOverrodeMaxCols = false;
