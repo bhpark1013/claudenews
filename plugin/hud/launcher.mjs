@@ -10,6 +10,9 @@
  * so installs from a renamed/forked marketplace (e.g. claudenews-pr) work
  * too — not just the canonical "claudenews" marketplace.
  *
+ * Arguments are passed straight through to the real hud, so `--segment`
+ * works via this path too.
+ *
  * Fails safe: if no cached hud is found it prints a blank line so the
  * status line is never broken.
  */
@@ -48,7 +51,11 @@ try {
 } catch {}
 
 if (target) {
-  const r = spawnSync("node", [target], {
+  // Forward our own flags. The launcher is the stable path users configure,
+  // so a flag aimed at the hud (notably --segment, for embedding in another
+  // status line such as ccstatusline) has to survive the hop. Dropping argv
+  // silently rendered the full multi-line HUD inside a host widget instead.
+  const r = spawnSync("node", [target, ...process.argv.slice(2)], {
     stdio: ["inherit", "inherit", "inherit"],
   });
   process.exit(r.status ?? 0);
