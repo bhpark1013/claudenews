@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, ReactNode } from "react";
 import { createElement } from "react";
 
 // ─── Dictionary ───────────────────────────────────────────────────────────────
@@ -397,34 +397,32 @@ import React from "react";
 
 interface LocaleContextValue {
   locale: Locale;
-  setLocale: (l: Locale) => void;
   t: (key: TranslationKey) => string;
 }
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
 
-const STORAGE_KEY = "claudenews-locale";
-
-export function LocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>("en");
-
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
-    if (saved === "en" || saved === "ko") {
-      setLocaleState(saved);
-    }
-  }, []);
-
-  function setLocale(l: Locale) {
-    setLocaleState(l);
-    localStorage.setItem(STORAGE_KEY, l);
-  }
-
+/**
+ * The locale comes from the route, not from component state.
+ *
+ * This used to hold the locale in useState and restore it from localStorage in
+ * an effect. That meant the server always rendered English and Korean only
+ * appeared after hydration, so the Korean copy in this file -- a complete
+ * translation -- was invisible to every crawler, and there was no Korean URL to
+ * rank, link or share in the first place.
+ */
+export function LocaleProvider({
+  locale,
+  children,
+}: {
+  locale: Locale;
+  children: ReactNode;
+}) {
   function t(key: TranslationKey): string {
     return dict[locale][key] as string;
   }
 
-  return createElement(LocaleContext.Provider, { value: { locale, setLocale, t } }, children);
+  return createElement(LocaleContext.Provider, { value: { locale, t } }, children);
 }
 
 export function useT() {
