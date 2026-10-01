@@ -1287,7 +1287,7 @@ def main():
     # nothing. Each run tops up at most PREWARM_PER_RUN new items — a hard cap
     # on Claude subprocesses, which matters now that every session rotates
     # independently (more rotations = more potential spawns).
-    TARGET_CACHED = RECENT_MAX + 6  # ~30: a little over the rotation buffer
+    TARGET_CACHED = 100  # cover the whole pool so rotation never runs dry and repeats
     PREWARM_PER_RUN = 4
     already_cached = sum(
         1 for it in items
