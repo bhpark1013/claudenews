@@ -116,10 +116,6 @@ let parentOutput = "";
 let maxCols = 120; // safe default — Claude Code's statusline doesn't pass width
 let userOverrodeMaxCols = false;
 let sourcesConfigured = false;
-let navEnabled = false;
-// Human-readable nav key combo shown in the rotating hint. Mirrors the binding
-// in claudenews-nav.lua (config.json -> navKeys); defaults to ctrl+shift+←/→.
-let navCombo = "ctrl+shift+←/→";
 // Summary line color (SGR params). Default to a readable light gray instead of
 // the faint/dim attribute (\x1b[2m), which many terminals render too low-contrast
 // to read. Override via config "summaryColor" (e.g. "37" plain white, "38;5;250"
@@ -129,8 +125,6 @@ if (existsSync(CONFIG_FILE)) {
   try {
     const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
     sourcesConfigured = cfg.sourcesConfigured === true;
-    navEnabled = cfg.navEnabled === true;
-    navCombo = formatNavCombo(cfg.navKeys);
     if (typeof cfg.summaryColor === "string" && /^[0-9;]+$/.test(cfg.summaryColor)) {
       summaryColor = cfg.summaryColor;
     }
@@ -229,8 +223,7 @@ function detectTerminalColsCached() {
 // The upstream statusline (e.g. the OMC HUD) is by far the costliest part of a
 // render — ~0.17s vs ~0.03s for the news line — so re-running it on EVERY frame
 // is what makes a low refreshInterval expensive. Cache its stdout per-session
-// for a short TTL: the news line still re-renders every frame (so key-nav feels
-// instant) while the upstream line refreshes only every TTL. Keyed per-session
+// for a short TTL: the news line still re-renders every frame while the upstream line refreshes only every TTL. Keyed per-session
 // because the upstream output is session-specific (model / dir / context); a
 // shared file would show one session's HUD in another. Transient failures
 // (empty stdout / timeout) are NOT cached so the next frame retries.
@@ -418,10 +411,8 @@ end tell`
 // multiple panes/sessions don't all show the same headline. The status line
 // receives the session id on stdin; fall back to the shared global file when
 // it's missing (older Claude Code) or that session hasn't rotated yet.
-// In nav mode news is global (every session shows the same item), so read the
-// shared file directly. Otherwise prefer this session's own rotated item.
 let newsFilePath = NEWS_FILE;
-if (!navEnabled) {
+{
   let sid = "";
   try {
     sid = (JSON.parse(stdinData) || {}).session_id || "";
@@ -501,17 +492,9 @@ if (existsSync(newsFilePath)) {
       // built-in fallback) — only if it still fits so the line never wraps.
       if (!SEGMENT) {
         const evergreen = loadServerGuides() || GUIDES_EVERGREEN;
-        let pool = sourcesConfigured
+        const pool = sourcesConfigured
           ? evergreen
           : [GUIDE_PICK_SOURCES, ...evergreen];
-        // Key-navigation tips. The activation tip appears ONLY on terminals we
-        // can actually drive (never advertise a feature that can't work here)
-        // and only while nav is still off; once on, show the shortcut instead.
-        if (navEnabled) {
-          pool = [`${navCombo} to browse news`, ...pool];
-        } else if (terminalSupportsNav()) {
-          pool = [`/claudenews:nav on — browse news with ${navCombo}`, ...pool];
-        }
         const guide =
           pool[Math.floor(Date.now() / GUIDE_ROTATE_MS) % pool.length];
         const HINT = "  " + guide;
@@ -623,48 +606,6 @@ function visibleCols(line) {
   let c = 0;
   for (const ch of visible) c += charCols(ch.codePointAt(0));
   return c;
-}
-
-// Format the configured nav key combo (config.json -> navKeys) into the hint
-// string, mirroring the binding in claudenews-nav.lua. Falls back to the default
-// ctrl+shift+←/→ for any missing/invalid field.
-function formatNavCombo(nk) {
-  const DEF = "ctrl+shift+←/→";
-  if (!nk || typeof nk !== "object") return DEF;
-  const alias = { control: "ctrl", command: "cmd", option: "alt", opt: "alt" };
-  const order = ["ctrl", "shift", "alt", "cmd"]; // ctrl+shift first → matches DEF
-  const have = new Set();
-  if (Array.isArray(nk.modifiers)) {
-    for (const m of nk.modifiers) {
-      const k = String(m).toLowerCase();
-      const norm = alias[k] || k;
-      if (order.includes(norm)) have.add(norm);
-    }
-  }
-  const mods = order.filter((m) => have.has(m));
-  if (!mods.length) return DEF; // empty/invalid mods → bare arrows are never bound
-  const sym = (name, fallback) => {
-    const k = typeof name === "string" ? name.toLowerCase() : "";
-    return { left: "←", right: "→", up: "↑", down: "↓" }[k] || k || fallback;
-  };
-  return `${mods.join("+")}+${sym(nk.prev, "←")}/${sym(nk.next, "→")}`;
-}
-
-// Best-effort: is this a terminal whose focused pane's tty the Hammerspoon nav
-// tap can resolve (to confirm Claude Code is focused before acting)? Used only
-// to decide whether to advertise /claudenews:nav. Conservative — tmux/ssh and
-// unknown/unsupported terminals (Ghostty<1.4, Warp, Alacritty, VS Code) ⇒ false
-// so we never suggest the feature where it can't work.
-function terminalSupportsNav() {
-  if (process.env.TMUX) return false; // tmux hides the outer terminal
-  const term = process.env.TERM || "";
-  if (term.startsWith("screen") || term.startsWith("tmux")) return false;
-  const prog = process.env.TERM_PROGRAM || "";
-  if (prog === "iTerm.app" || prog === "Apple_Terminal" || prog === "WezTerm") {
-    return true;
-  }
-  if (process.env.KITTY_WINDOW_ID || term.includes("kitty")) return true;
-  return false;
 }
 
 if (SEGMENT) {

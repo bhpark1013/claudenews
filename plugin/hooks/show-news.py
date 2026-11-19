@@ -29,12 +29,19 @@ SUMMARY_CACHE = os.path.join(CONFIG_DIR, ".summary-cache.json")
 SOURCES_CACHE = os.path.join(CONFIG_DIR, ".sources-cache.json")
 GUIDES_CACHE = os.path.join(CONFIG_DIR, ".guides-cache.json")
 RECENT_FILE = os.path.join(CONFIG_DIR, ".recent")
-# Opt-in key-driven navigation (config.navEnabled). An ordered candidate list
-# + a global cursor let ctrl+shift+←/→ step prev/next; a short pin keeps a manual
-# pick from being clobbered by auto-rotation.
-NEWS_LIST_FILE = os.path.join(CONFIG_DIR, ".news-list.json")
-NAV_STATE_FILE = os.path.join(CONFIG_DIR, ".nav-state.json")
-NAV_PIN_SEC = 300
+# Leftovers of the removed key-navigation feature (v0.26.0); cleaned up once by
+# remove_legacy_nav().
+LEGACY_NAV_FILES = [
+    os.path.join(CONFIG_DIR, ".news-list.json"),
+    os.path.join(CONFIG_DIR, ".nav-state.json"),
+    os.path.join(CONFIG_DIR, "claudenews-nav.lua"),
+    os.path.join(os.path.expanduser("~"), ".claude", "hud", "claudenews-nav"),
+]
+HS_INIT = os.path.join(os.path.expanduser("~"), ".hammerspoon", "init.lua")
+CLAUDE_SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+# Status-line refresh cadence. Each tick spawns a node process per open session
+# (and macOS re-checks every exec), so 1s burned real CPU/battery.
+STATUSLINE_REFRESH_SEC = 30
 SOURCES_TTL_SEC = 3600
 GUIDES_TTL_SEC = 3600
 # Global ring buffer (shared across ALL sessions): don't re-show a URL until
@@ -489,7 +496,7 @@ def launch_summarizer(url, title, target_lang, raw_text=""):
 def prewarm_translations(items, target_lang, budget=5):
     """Translate up to `budget` not-yet-cached titles from the list in the
     background. Without this only the picked/landed item is translated, so
-    navigating shows many untranslated titles. Titles are cheap and cached
+    rotating shows many untranslated titles. Titles are cheap and cached
     permanently, so this fills the whole list over a few invocations. Deduped by
     cached_translation + translator.py's self-releasing per-title lock, so once
     the list is translated later calls spawn nothing."""
@@ -511,15 +518,72 @@ def prewarm_translations(items, target_lang, budget=5):
     return warmed
 
 
-def nav_enabled(config):
-    return bool((config or {}).get("navEnabled"))
+def remove_legacy_nav(config):
+    """One-time cleanup for installs that turned on the removed key-navigation
+    feature, plus the status-line refresh migration 1s -> 30s. Marked done in
+    config so it runs once. Never raises."""
+    if config is None or config.get("navRemoved"):
+        return  # no config yet = fresh install; setup already writes 30s
+    try:
+        had_hs_block = False
+        if os.path.exists(HS_INIT):
+            with open(HS_INIT, encoding="utf-8") as f:
+                text = f.read()
+            new = re.sub(
+                r"-- >>> claudenews-nav >>>.*?-- <<< claudenews-nav <<<\n?",
+                "", text, flags=re.S,
+            )
+            if new != text:
+                had_hs_block = True
+                with open(HS_INIT, "w", encoding="utf-8") as f:
+                    f.write(new)
+        for path in LEGACY_NAV_FILES:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        # Restart Hammerspoon only if WE had wired a key tap into it, so the
+        # ctrl+shift+arrow capture goes away now instead of at next login.
+        if had_hs_block and subprocess.run(
+            ["pgrep", "-x", "Hammerspoon"], capture_output=True
+        ).returncode == 0:
+            subprocess.Popen(
+                ["/bin/sh", "-c", "pkill -x Hammerspoon; sleep 1; open -g -a Hammerspoon"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        # Raise our status line's refreshInterval (setup / nav on wrote 1).
+        # Only touches a statusLine claudenews owns; leaves custom values alone.
+        try:
+            with open(CLAUDE_SETTINGS, encoding="utf-8") as f:
+                settings = json.load(f)
+            sl = settings.get("statusLine")
+            if (isinstance(sl, dict) and "claudenews-hud" in (sl.get("command") or "")
+                    and sl.get("refreshInterval") == 1):
+                sl["refreshInterval"] = STATUSLINE_REFRESH_SEC
+                # In-place (not rename) so a symlinked settings.json survives;
+                # indented like Claude Code writes it.
+                with open(CLAUDE_SETTINGS, "w", encoding="utf-8") as f:
+                    json.dump(settings, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+                log(f"statusLine refreshInterval 1 -> {STATUSLINE_REFRESH_SEC}")
+        except Exception:
+            pass
+        cfg = dict(config or {})
+        cfg.pop("navEnabled", None)
+        cfg.pop("navKeys", None)
+        cfg["navRemoved"] = True
+        atomic_write_json(CONFIG_FILE, cfg)
+        log("removed legacy key-nav wiring")
+    except Exception as e:
+        log(f"legacy nav cleanup error: {e}")
 
 
 # ── client-fetched feed sources ──────────────────────────────────────────────
 # News reaches one shared pool through two interchangeable TRANSPORTS:
 #   • server   — selected catalog ids sent to the API, fetched server-side
 #   • client   — RSS/Atom URLs fetched directly from THIS machine
-# Both yield the same item shape and flow through rotation / nav / translation /
+# Both yield the same item shape and flow through rotation / translation /
 # summary identically — nothing downstream knows or cares which transport a item
 # came from. Client feeds exist for any feed the server can't reach: e.g. Reddit
 # 403s its .json and the server's datacenter IP, but www.reddit.com/r/<sub>/.rss
@@ -938,120 +1002,6 @@ def merge_client_feeds(items, config):
     return items
 
 
-def save_news_list(items):
-    """Persist the ordered candidate list so --nav can step through it."""
-    slim = [
-        {k: it.get(k) for k in ("title", "url", "source", "score", "comments",
-                                "lang", "feed_text", "custom")}
-        for it in items
-        if isinstance(it, dict) and it.get("url")
-    ]
-    atomic_write_json(NEWS_LIST_FILE, {"items": slim, "ts": int(time.time() * 1000)})
-    return slim
-
-
-def load_news_list():
-    try:
-        with open(NEWS_LIST_FILE, encoding="utf-8") as f:
-            data = json.load(f) or {}
-        items = data.get("items")
-        return items if isinstance(items, list) else []
-    except Exception:
-        return []
-
-
-def load_nav_state():
-    try:
-        with open(NAV_STATE_FILE, encoding="utf-8") as f:
-            s = json.load(f) or {}
-        return int(s.get("index", 0)), float(s.get("pinnedUntil", 0))
-    except Exception:
-        return 0, 0.0
-
-
-def save_nav_state(index, pinned_until):
-    atomic_write_json(
-        NAV_STATE_FILE, {"index": int(index), "pinnedUntil": float(pinned_until)}
-    )
-
-
-def build_record(item, translate_enabled, target_lang):
-    """Build a .current-news record for one list item using ONLY cached
-    translation + summary (no network, no spawns) so nav feels instant."""
-    summary_lang = target_lang if translate_enabled else "en"
-    original_title = item.get("title", "") or ""
-    url = item.get("url", "") or ""
-    display_title = original_title
-    if translate_enabled and item.get("lang") != target_lang:
-        cached = cached_translation(original_title, target_lang)
-        if cached:
-            display_title = cached
-    record = {
-        "title": display_title,
-        "url": url,
-        "source": item.get("source", "") or "",
-        "score": item.get("score"),
-        "comments": item.get("comments"),
-        "timestamp": int(time.time() * 1000),
-        "original_title": original_title,
-    }
-    summary = cached_summary(url, summary_lang) if url else None
-    if summary:
-        record["summary"] = summary
-    return record
-
-
-def do_nav(direction):
-    """--nav next|prev: step the global cursor over the cached list, write the
-    shared .current-news, and pin it so auto-rotation won't immediately undo it."""
-    config = load_config()
-    items = load_news_list()
-    if not items:
-        log("nav: no cached list yet")
-        return
-    index, _pinned = load_nav_state()
-    step = -1 if direction == "prev" else 1
-    index = (index + step) % len(items)
-    translate_enabled, target_lang = translation_settings(config)
-    item = items[index]
-    record = build_record(item, translate_enabled, target_lang)
-    atomic_write_json(CURRENT_NEWS_FILE, record)
-    save_nav_state(index, time.time() + NAV_PIN_SEC)
-
-    # Lazy backfill: if this item isn't summarized/translated yet, spawn the
-    # background workers. They rewrite .current-news when done (matched by
-    # original_title), so the description/translation fills in on the next
-    # status-line refresh instead of staying blank.
-    url = item.get("url", "") or ""
-    original_title = item.get("title", "") or ""
-    summary_lang = target_lang if translate_enabled else "en"
-    if url and not cached_summary(url, summary_lang):
-        launch_summarizer(url, original_title, summary_lang,
-                          raw_text=item.get("feed_text") or "")
-    if (translate_enabled and item.get("lang") != target_lang
-            and not cached_translation(original_title, target_lang)):
-        launch_translator(original_title, target_lang)
-
-    # Look-ahead: warm the next items in the travel direction so flipping stays
-    # instant instead of each item starting its translation only once landed on.
-    # Titles are cheap (translate 6 ahead); summaries are heavier (2 ahead).
-    # translator.py / summarizer.py each hold a self-releasing per-item lock, so
-    # duplicate spawns (on-landing + fast repeat presses) exit cheaply.
-    for off in range(1, 7):
-        nxt = items[(index + step * off) % len(items)]
-        if not isinstance(nxt, dict):
-            continue
-        n_title = nxt.get("title") or ""
-        n_url = nxt.get("url") or ""
-        if (translate_enabled and nxt.get("lang") != target_lang
-                and n_title and not cached_translation(n_title, target_lang)):
-            launch_translator(n_title, target_lang)
-        if off <= 2 and n_url and not cached_summary(n_url, summary_lang):
-            launch_summarizer(n_url, n_title, summary_lang,
-                              raw_text=nxt.get("feed_text") or "")
-    log(f"nav {direction} -> [{index}/{len(items)}] {record.get('title', '')[:40]}")
-
-
 def main():
     if os.environ.get(BACKGROUND_CHILD_ENV) == "1":
         pass_through()
@@ -1080,12 +1030,7 @@ def main():
         enabled = config.get("newsEnabled", True)
         api_url = config.get("apiUrl", DEFAULT_API)
 
-    # Opt-in key navigation makes news GLOBAL: every session reads the shared
-    # .current-news so ctrl+shift+←/→ moves all panes together. When off, the
-    # per-session rotation below is left exactly as it was.
-    global_mode = nav_enabled(config)
-    if global_mode:
-        cur_news_file, last_open_file = CURRENT_NEWS_FILE, LAST_OPEN_FILE
+    remove_legacy_nav(config)
 
     # Daily active-user heartbeat. Runs before the news enabled/rate-limit
     # gates so a still-installed client counts as active even with news off;
@@ -1116,7 +1061,7 @@ def main():
     response = fetch_news(api_url, selected)
     items = (response or {}).get("items") or []
     # Merge in client-fetched feed items (pulled directly from this machine) so
-    # they rotate/nav alongside server sources. No-op unless clientFeeds is set.
+    # they rotate alongside server sources. No-op unless clientFeeds is set.
     items = merge_client_feeds(items, config)
     api_pick = (response or {}).get("pick")
     if not api_pick and not items:
@@ -1133,23 +1078,6 @@ def main():
     # instead of locking onto the first cached one in API order. Avoid
     # re-picking the URL that was just shown.
     import random
-
-    # Global (nav) mode: persist the ordered list for --nav and, if the user
-    # navigated by hand recently, keep their pinned pick instead of rotating.
-    saved_list = None
-    if global_mode:
-        saved_list = save_news_list(items)
-        # Fill the whole list's translations in the background — BEFORE the pin
-        # check, so chatting while the nav is pinned (i.e. right after the user
-        # started browsing) still warms the cache. Otherwise flipping to any
-        # not-yet-landed item shows it untranslated until its on-landing spawn.
-        if translate_enabled:
-            prewarm_translations(saved_list, target_lang)
-        _idx, pinned_until = load_nav_state()
-        if time.time() < pinned_until:
-            log("nav pinned — keeping current item, skipping rotation")
-            pass_through()
-            return
 
     prev_url = ""
     if os.path.exists(cur_news_file):
@@ -1168,10 +1096,7 @@ def main():
     # OTHER live session is currently showing so two panes never collide on the
     # same headline. Degrades gracefully (see the rotatable fallback below) when
     # the candidate pool is smaller than the number of open sessions.
-    if not global_mode:
-        # Cross-session non-overlap only applies to per-session mode; global
-        # (nav) mode intentionally shows the same item in every session.
-        recent |= other_session_urls(cur_news_file)
+    recent |= other_session_urls(cur_news_file)
 
     def _not_recent(lst):
         return [it for it in lst if it.get("url") not in recent]
@@ -1179,7 +1104,7 @@ def main():
     # Eligible for rotation = has a cached summary (instant full render) OR is a
     # feed item (server-registered custom feed or legacy client feed). Those
     # sources (e.g. Reddit) never get a scrapable summary, but should still
-    # rotate into the status line (title-only) instead of being nav-only.
+    # rotate into the status line (title-only) instead of never showing.
     cached_candidates = [
         it for it in items
         if isinstance(it, dict) and it.get("url")
@@ -1260,15 +1185,6 @@ def main():
         except Exception:
             pass
 
-    # Keep the nav cursor pointed at whatever auto-rotation just chose, so the
-    # next ctrl+shift+→ steps forward from here. Unpinned (pinnedUntil=0).
-    if global_mode and saved_list is not None:
-        try:
-            idx = next(i for i, it in enumerate(saved_list) if it.get("url") == url)
-        except StopIteration:
-            idx = 0
-        save_nav_state(idx, 0)
-
     # Launch background translation if needed and not yet cached
     if title_needs_translation and display_title == original_title:
         launch_translator(original_title, target_lang)
@@ -1316,11 +1232,10 @@ def main():
             f"({already_cached}/{TARGET_CACHED} cached, {summary_lang})"
         )
 
-    # Pre-warm TRANSLATIONS for the list (non-nav mode; nav mode already did this
-    # before the pin check). Previously only the picked item was translated, so
-    # rotating/navigating showed many untranslated titles until each was landed
+    # Pre-warm TRANSLATIONS for the list. Previously only the picked item was
+    # translated, so rotating showed many untranslated titles until each was landed
     # on. Cheap and cached permanently — a one-time fill over a few rotations.
-    if translate_enabled and not global_mode:
+    if translate_enabled:
         prewarm_translations(items, target_lang)
 
     pass_through()
@@ -1340,12 +1255,5 @@ if __name__ == "__main__":
             migrate_client_feeds(_cfg.get("apiUrl", DEFAULT_API))
         except Exception as e:
             log(f"feed migration error: {e}")
-        sys.exit(0)
-    if len(sys.argv) >= 2 and sys.argv[1] == "--nav":
-        _direction = sys.argv[2] if len(sys.argv) >= 3 else "next"
-        try:
-            do_nav("prev" if _direction == "prev" else "next")
-        except Exception as e:
-            log(f"nav error: {e}")
         sys.exit(0)
     main()

@@ -63,9 +63,9 @@ else:
     settings["statusLine"] = {
         "type": "command",
         "command": f"node {hud}",
-        # 1s is the floor Claude Code honors (fractional values are unsupported);
-        # nav data updates in ~70ms, so this keeps the visible step latency ~<1s.
-        "refreshInterval": 1,
+        # Each tick spawns node once per open session (and macOS re-checks the
+        # exec), so keep it slow; the news itself changes per prompt anyway.
+        "refreshInterval": 30,
     }
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
